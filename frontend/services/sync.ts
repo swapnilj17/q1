@@ -74,53 +74,26 @@ export const syncFromCloud = async (userId: string): Promise<{ success: boolean;
       api.getEvents(),
       api.getReminders(),
     ]);
-    
-    const database = await import('./database');
-    
-    // Merge notes
+
+    // Merge notes via abstraction (no direct expo-sqlite imports)
     for (const note of notes) {
-      const local = await database.getLocalNote(note.id);
-      if (!local) {
-        // Insert from cloud
-        const dbInstance = await import('expo-sqlite').then(m => m.openDatabaseAsync('lifeflow.db'));
-        await dbInstance.runAsync(
-          `INSERT OR REPLACE INTO notes (id, user_id, title, content, tags, pinned, journal_date, created_at, updated_at, synced, deleted)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0)`,
-          [note.id, note.user_id, note.title, note.content, JSON.stringify(note.tags), note.pinned ? 1 : 0, note.journal_date || null, note.created_at, note.updated_at]
-        );
-        downloaded++;
-      }
+      const inserted = await db.upsertNoteFromCloud(note);
+      if (inserted) downloaded++;
     }
-    
-    // Merge events  
+
+    // Merge events
     for (const event of events) {
-      const dbInstance = await import('expo-sqlite').then(m => m.openDatabaseAsync('lifeflow.db'));
-      const local = await dbInstance.getFirstAsync('SELECT id FROM events WHERE id = ?', [event.id]);
-      if (!local) {
-        await dbInstance.runAsync(
-          `INSERT OR REPLACE INTO events (id, user_id, title, description, date, start_time, end_time, created_at, synced, deleted)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 0)`,
-          [event.id, event.user_id, event.title, event.description, event.date, event.start_time || null, event.end_time || null, event.created_at]
-        );
-        downloaded++;
-      }
+      const inserted = await db.upsertEventFromCloud(event);
+      if (inserted) downloaded++;
     }
-    
+
     // Merge reminders
     for (const reminder of reminders) {
-      const dbInstance = await import('expo-sqlite').then(m => m.openDatabaseAsync('lifeflow.db'));
-      const local = await dbInstance.getFirstAsync('SELECT id FROM reminders WHERE id = ?', [reminder.id]);
-      if (!local) {
-        await dbInstance.runAsync(
-          `INSERT OR REPLACE INTO reminders (id, user_id, title, completed, due_date, created_at, synced, deleted)
-           VALUES (?, ?, ?, ?, ?, ?, 1, 0)`,
-          [reminder.id, reminder.user_id, reminder.title, reminder.completed ? 1 : 0, reminder.due_date || null, reminder.created_at]
-        );
-        downloaded++;
-      }
+      const inserted = await db.upsertReminderFromCloud(reminder);
+      if (inserted) downloaded++;
     }
-    
-    await database.updateLastSync(userId);
+
+    await db.updateLastSync(userId);
     return { success: true, downloaded };
   } catch (e) {
     console.error('Download from cloud failed:', e);

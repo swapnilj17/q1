@@ -1,10 +1,11 @@
 import { Platform } from 'react-native';
 import { Note, Event, Reminder, User } from '../types';
 
-// Lazy-load expo-sqlite only on native platforms (web cannot resolve the wasm worker).
-const SQLite: any = Platform.OS === 'web' ? null : require('expo-sqlite');
+// On web we provide an AsyncStorage-based shim (see database.web.ts).
+// Metro's platform extension resolution will swap this file out automatically.
+import * as SQLite from 'expo-sqlite';
 
-let db: any = null;
+let db: SQLite.SQLiteDatabase | null = null;
 
 export const initDatabase = async (): Promise<void> => {
   db = await SQLite.openDatabaseAsync('lifeflow.db');
@@ -363,4 +364,67 @@ export const clearAllData = async (): Promise<void> => {
     DELETE FROM sync_queue;
     DELETE FROM users;
   `);
+};
+
+// ============== CLOUD UPSERTS (no sync queue) ==============
+export const upsertNoteFromCloud = async (note: any): Promise<boolean> => {
+  const database = getDb();
+  const existing = await database.getFirstAsync<any>('SELECT id FROM notes WHERE id = ?', [note.id]);
+  if (existing) return false;
+  await database.runAsync(
+    `INSERT OR REPLACE INTO notes (id, user_id, title, content, tags, pinned, journal_date, created_at, updated_at, synced, deleted)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0)`,
+    [
+      note.id,
+      note.user_id,
+      note.title || '',
+      note.content || '',
+      JSON.stringify(note.tags || []),
+      note.pinned ? 1 : 0,
+      note.journal_date || null,
+      note.created_at,
+      note.updated_at,
+    ]
+  );
+  return true;
+};
+
+export const upsertEventFromCloud = async (event: any): Promise<boolean> => {
+  const database = getDb();
+  const existing = await database.getFirstAsync<any>('SELECT id FROM events WHERE id = ?', [event.id]);
+  if (existing) return false;
+  await database.runAsync(
+    `INSERT OR REPLACE INTO events (id, user_id, title, description, date, start_time, end_time, created_at, synced, deleted)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 0)`,
+    [
+      event.id,
+      event.user_id,
+      event.title || '',
+      event.description || '',
+      event.date || '',
+      event.start_time || null,
+      event.end_time || null,
+      event.created_at,
+    ]
+  );
+  return true;
+};
+
+export const upsertReminderFromCloud = async (reminder: any): Promise<boolean> => {
+  const database = getDb();
+  const existing = await database.getFirstAsync<any>('SELECT id FROM reminders WHERE id = ?', [reminder.id]);
+  if (existing) return false;
+  await database.runAsync(
+    `INSERT OR REPLACE INTO reminders (id, user_id, title, completed, due_date, created_at, synced, deleted)
+     VALUES (?, ?, ?, ?, ?, ?, 1, 0)`,
+    [
+      reminder.id,
+      reminder.user_id,
+      reminder.title || '',
+      reminder.completed ? 1 : 0,
+      reminder.due_date || null,
+      reminder.created_at,
+    ]
+  );
+  return true;
 };

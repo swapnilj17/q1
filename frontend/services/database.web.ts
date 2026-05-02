@@ -275,3 +275,37 @@ export const getUnsyncedCount = async (): Promise<number> => {
 export const clearAllData = async (): Promise<void> => {
   await Promise.all(Object.values(KEYS).map((k) => AsyncStorage.removeItem(k)));
 };
+
+// ============== CLOUD UPSERTS (no sync queue) ==============
+export const upsertNoteFromCloud = async (note: any): Promise<boolean> => {
+  const all = await readArr<any>(KEYS.notes);
+  if (all.some((n) => n.id === note.id)) return false;
+  await writeArr(KEYS.notes, [
+    ...all,
+    {
+      ...note,
+      tags: note.tags || [],
+      pinned: !!note.pinned,
+      synced: 1,
+      deleted: 0,
+    },
+  ]);
+  return true;
+};
+
+export const upsertEventFromCloud = async (event: any): Promise<boolean> => {
+  const all = await readArr<any>(KEYS.events);
+  if (all.some((e) => e.id === event.id)) return false;
+  await writeArr(KEYS.events, [...all, { ...event, synced: 1, deleted: 0 }]);
+  return true;
+};
+
+export const upsertReminderFromCloud = async (reminder: any): Promise<boolean> => {
+  const all = await readArr<any>(KEYS.reminders);
+  if (all.some((r) => r.id === reminder.id)) return false;
+  await writeArr(KEYS.reminders, [
+    ...all,
+    { ...reminder, completed: !!reminder.completed, synced: 1, deleted: 0 },
+  ]);
+  return true;
+};
