@@ -1,7 +1,10 @@
-import * as SQLite from 'expo-sqlite';
+import { Platform } from 'react-native';
 import { Note, Event, Reminder, User } from '../types';
 
-let db: SQLite.SQLiteDatabase | null = null;
+// Lazy-load expo-sqlite only on native platforms (web cannot resolve the wasm worker).
+const SQLite: any = Platform.OS === 'web' ? null : require('expo-sqlite');
+
+let db: any = null;
 
 export const initDatabase = async (): Promise<void> => {
   db = await SQLite.openDatabaseAsync('lifeflow.db');

@@ -52,6 +52,8 @@ export default function DashboardScreen() {
 
   const onRefresh = () => { setRefreshing(true); loadData(); };
 
+  const getInitials = (name: string) => name?.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2) || 'U';
+
   const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
     header: {
@@ -60,6 +62,12 @@ export default function DashboardScreen() {
     },
     greeting: { fontSize: 24, fontWeight: '700', color: colors.text },
     date: { fontSize: 14, color: colors.textSecondary, marginTop: 4 },
+    headerRight: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+    profileButton: {
+      width: 40, height: 40, borderRadius: 20, backgroundColor: colors.primary,
+      justifyContent: 'center', alignItems: 'center',
+    },
+    profileInitials: { fontSize: 14, fontWeight: '600', color: '#FFFFFF' },
     content: { flex: 1, paddingHorizontal: 20 },
     card: {
       backgroundColor: colors.card, borderRadius: 16, padding: 16, marginBottom: 16,
@@ -100,11 +108,6 @@ export default function DashboardScreen() {
     fabMenuItem: { flexDirection: 'row', alignItems: 'center', padding: 12, borderRadius: 8 },
     fabMenuText: { marginLeft: 12, fontSize: 14, fontWeight: '500', color: colors.text },
     loader: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-    offlineBadge: {
-      flexDirection: 'row', alignItems: 'center', backgroundColor: colors.accent,
-      paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8,
-    },
-    offlineBadgeText: { fontSize: 11, color: '#FFFFFF', marginLeft: 4, fontWeight: '500' },
   });
 
   if (isLoading || !isDbReady) {
@@ -127,9 +130,10 @@ export default function DashboardScreen() {
           <Text style={styles.greeting}>Hello, {user?.name?.split(' ')[0]}!</Text>
           <Text style={styles.date}>{dateString}</Text>
         </View>
-        <View style={styles.offlineBadge}>
-          <Ionicons name="phone-portrait" size={12} color="#FFFFFF" />
-          <Text style={styles.offlineBadgeText}>Local</Text>
+        <View style={styles.headerRight}>
+          <TouchableOpacity style={styles.profileButton} onPress={() => router.push('/profile')}>
+            <Text style={styles.profileInitials}>{getInitials(user?.name || '')}</Text>
+          </TouchableOpacity>
         </View>
       </View>
 
