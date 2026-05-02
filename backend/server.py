@@ -1,5 +1,5 @@
 """
-LifeFlow Backend - Personal Productivity Assistant API
+LifeFlow Backend - Supabase Edition
 """
 from fastapi import FastAPI, HTTPException, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,43 +7,26 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional, List
 from datetime import datetime, timedelta
-from bson import ObjectId
-from motor.motor_asyncio import AsyncIOMotorClient
+from supabase import create_client, Client
 import jwt
 import bcrypt
 import os
+import uuid
 from dotenv import load_dotenv
-from contextlib import asynccontextmanager
 
 load_dotenv()
 
 # Environment variables
-MONGO_URL = os.getenv("MONGO_URL", "mongodb://localhost:27017")
-DB_NAME = os.getenv("DB_NAME", "lifeflow_db")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 JWT_SECRET = os.getenv("JWT_SECRET", "lifeflow-secret-key-2025")
 JWT_ALGORITHM = "HS256"
 EMERGENT_LLM_KEY = os.getenv("EMERGENT_LLM_KEY", "")
 
-# MongoDB client
-client: AsyncIOMotorClient = None
-db = None
+# Supabase client
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    global client, db
-    client = AsyncIOMotorClient(MONGO_URL)
-    db = client[DB_NAME]
-    # Create indexes
-    await db.users.create_index("email", unique=True)
-    await db.notes.create_index([("user_id", 1), ("pinned", -1), ("created_at", -1)])
-    await db.events.create_index([("user_id", 1), ("date", 1)])
-    await db.reminders.create_index([("user_id", 1), ("completed", 1)])
-    print("Connected to MongoDB")
-    yield
-    client.close()
-    print("Disconnected from MongoDB")
-
-app = FastAPI(title="LifeFlow API", lifespan=lifespan)
+app = FastAPI(title="LifeFlow API")
 
 # CORS
 app.add_middleware(
@@ -57,13 +40,6 @@ app.add_middleware(
 security = HTTPBearer()
 
 # Helper functions
-def serialize_doc(doc):
-    """Convert MongoDB document to JSON-serializable dict"""
-    if doc is None:
-        return None
-    doc["id"] = str(doc.pop("_id"))
-    return doc
-
 def create_token(user_id: str) -> str:
     payload = {
         "user_id": user_id,
@@ -82,10 +58,10 @@ def verify_token(token: str) -> str:
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
     user_id = verify_token(credentials.credentials)
-    user = await db.users.find_one({"_id": ObjectId(user_id)})
-    if not user:
+    result = supabase.table("users").select("*").eq("id", user_id).execute()
+    if not result.data:
         raise HTTPException(status_code=401, detail="User not found")
-    return serialize_doc(user)
+    return result.data[0]
 
 # Pydantic Models
 class UserRegister(BaseModel):
@@ -97,12 +73,17 @@ class UserLogin(BaseModel):
     email: EmailStr
     password: str
 
+class ProfileUpdate(BaseModel):
+    name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    theme_preference: Optional[str] = None
+
 class NoteCreate(BaseModel):
     title: str
     content: str = ""
     tags: List[str] = []
     pinned: bool = False
-    journal_date: Optional[str] = None  # ISO date string for journal entries
+    journal_date: Optional[str] = None
 
 class NoteUpdate(BaseModel):
     title: Optional[str] = None
@@ -113,10 +94,9 @@ class NoteUpdate(BaseModel):
 class EventCreate(BaseModel):
     title: str
     description: str = ""
-    date: str  # ISO date string
+    date: str
     start_time: Optional[str] = None
     end_time: Optional[str] = None
-    linked_note_id: Optional[str] = None
 
 class EventUpdate(BaseModel):
     title: Optional[str] = None
@@ -124,7 +104,6 @@ class EventUpdate(BaseModel):
     date: Optional[str] = None
     start_time: Optional[str] = None
     end_time: Optional[str] = None
-    linked_note_id: Optional[str] = None
 
 class ReminderCreate(BaseModel):
     title: str
@@ -140,51 +119,60 @@ class ReminderUpdate(BaseModel):
 @app.post("/api/auth/register")
 async def register(user: UserRegister):
     # Check if user exists
-    existing = await db.users.find_one({"email": user.email})
-    if existing:
+    existing = supabase.table("users").select("id").eq("email", user.email).execute()
+    if existing.data:
         raise HTTPException(status_code=400, detail="Email already registered")
     
     # Hash password
     password_hash = bcrypt.hashpw(user.password.encode(), bcrypt.gensalt()).decode()
+    user_id = str(uuid.uuid4())
     
     # Create user
     user_doc = {
+        "id": user_id,
         "email": user.email,
         "password_hash": password_hash,
         "name": user.name,
+        "avatar_url": None,
         "theme_preference": "light",
-        "created_at": datetime.utcnow()
+        "subscription": "free",
+        "created_at": datetime.utcnow().isoformat()
     }
-    result = await db.users.insert_one(user_doc)
+    supabase.table("users").insert(user_doc).execute()
     
-    token = create_token(str(result.inserted_id))
+    token = create_token(user_id)
     return {
         "token": token,
         "user": {
-            "id": str(result.inserted_id),
+            "id": user_id,
             "email": user.email,
             "name": user.name,
-            "theme_preference": "light"
+            "avatar_url": None,
+            "theme_preference": "light",
+            "subscription": "free"
         }
     }
 
 @app.post("/api/auth/login")
 async def login(credentials: UserLogin):
-    user = await db.users.find_one({"email": credentials.email})
-    if not user:
+    result = supabase.table("users").select("*").eq("email", credentials.email).execute()
+    if not result.data:
         raise HTTPException(status_code=401, detail="Invalid credentials")
     
+    user = result.data[0]
     if not bcrypt.checkpw(credentials.password.encode(), user["password_hash"].encode()):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     
-    token = create_token(str(user["_id"]))
+    token = create_token(user["id"])
     return {
         "token": token,
         "user": {
-            "id": str(user["_id"]),
+            "id": user["id"],
             "email": user["email"],
             "name": user["name"],
-            "theme_preference": user.get("theme_preference", "light")
+            "avatar_url": user.get("avatar_url"),
+            "theme_preference": user.get("theme_preference", "light"),
+            "subscription": user.get("subscription", "free")
         }
     }
 
@@ -194,19 +182,43 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         "id": current_user["id"],
         "email": current_user["email"],
         "name": current_user["name"],
-        "theme_preference": current_user.get("theme_preference", "light")
+        "avatar_url": current_user.get("avatar_url"),
+        "theme_preference": current_user.get("theme_preference", "light"),
+        "subscription": current_user.get("subscription", "free")
     }
 
-@app.put("/api/auth/theme")
-async def update_theme(theme: str, current_user: dict = Depends(get_current_user)):
-    if theme not in ["light", "dark"]:
-        raise HTTPException(status_code=400, detail="Theme must be 'light' or 'dark'")
+@app.put("/api/auth/profile")
+async def update_profile(profile: ProfileUpdate, current_user: dict = Depends(get_current_user)):
+    update_data = {}
+    if profile.name is not None:
+        update_data["name"] = profile.name
+    if profile.avatar_url is not None:
+        update_data["avatar_url"] = profile.avatar_url
+    if profile.theme_preference is not None:
+        update_data["theme_preference"] = profile.theme_preference
     
-    await db.users.update_one(
-        {"_id": ObjectId(current_user["id"])},
-        {"$set": {"theme_preference": theme}}
-    )
-    return {"theme_preference": theme}
+    if update_data:
+        supabase.table("users").update(update_data).eq("id", current_user["id"]).execute()
+    
+    # Get updated user
+    result = supabase.table("users").select("*").eq("id", current_user["id"]).execute()
+    user = result.data[0]
+    return {
+        "id": user["id"],
+        "email": user["email"],
+        "name": user["name"],
+        "avatar_url": user.get("avatar_url"),
+        "theme_preference": user.get("theme_preference", "light"),
+        "subscription": user.get("subscription", "free")
+    }
+
+@app.put("/api/auth/subscription")
+async def update_subscription(plan: str, current_user: dict = Depends(get_current_user)):
+    if plan not in ["free", "pro"]:
+        raise HTTPException(status_code=400, detail="Invalid plan")
+    
+    supabase.table("users").update({"subscription": plan}).eq("id", current_user["id"]).execute()
+    return {"subscription": plan}
 
 # ============== NOTES ENDPOINTS ==============
 
@@ -218,62 +230,55 @@ async def get_notes(
     search: Optional[str] = None,
     current_user: dict = Depends(get_current_user)
 ):
-    query = {"user_id": current_user["id"]}
+    query = supabase.table("notes").select("*").eq("user_id", current_user["id"])
     
     if pinned is not None:
-        query["pinned"] = pinned
+        query = query.eq("pinned", pinned)
     
     if journal is True:
-        query["journal_date"] = {"$exists": True, "$ne": None}
+        query = query.not_.is_("journal_date", "null")
     elif journal is False:
-        query["$or"] = [
-            {"journal_date": {"$exists": False}},
-            {"journal_date": None}
-        ]
+        query = query.is_("journal_date", "null")
     
     if journal_date:
-        query["journal_date"] = journal_date
+        query = query.eq("journal_date", journal_date)
+    
+    result = query.order("pinned", desc=True).order("created_at", desc=True).execute()
+    notes = result.data
     
     if search:
-        query["$or"] = [
-            {"title": {"$regex": search, "$options": "i"}},
-            {"content": {"$regex": search, "$options": "i"}},
-            {"tags": {"$in": [search]}}
-        ]
+        search_lower = search.lower()
+        notes = [n for n in notes if search_lower in n.get("title", "").lower() or search_lower in n.get("content", "").lower()]
     
-    cursor = db.notes.find(query).sort([("pinned", -1), ("created_at", -1)])
-    notes = await cursor.to_list(length=100)
-    return [serialize_doc(note) for note in notes]
+    return notes
 
 @app.post("/api/notes")
 async def create_note(note: NoteCreate, current_user: dict = Depends(get_current_user)):
+    note_id = str(uuid.uuid4())
     note_doc = {
+        "id": note_id,
         "user_id": current_user["id"],
         "title": note.title,
         "content": note.content,
         "tags": note.tags,
         "pinned": note.pinned,
         "journal_date": note.journal_date,
-        "created_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow()
+        "created_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.utcnow().isoformat()
     }
-    result = await db.notes.insert_one(note_doc)
-    note_doc["_id"] = result.inserted_id
-    return serialize_doc(note_doc)
+    supabase.table("notes").insert(note_doc).execute()
+    return note_doc
 
 @app.get("/api/notes/{note_id}")
 async def get_note(note_id: str, current_user: dict = Depends(get_current_user)):
-    note = await db.notes.find_one({
-        "_id": ObjectId(note_id),
-        "user_id": current_user["id"]
-    })
-    if not note:
+    result = supabase.table("notes").select("*").eq("id", note_id).eq("user_id", current_user["id"]).execute()
+    if not result.data:
         raise HTTPException(status_code=404, detail="Note not found")
-    return serialize_doc(note)
+    return result.data[0]
 
 @app.put("/api/notes/{note_id}")
 async def update_note(note_id: str, note: NoteUpdate, current_user: dict = Depends(get_current_user)):
-    update_data = {"updated_at": datetime.utcnow()}
+    update_data = {"updated_at": datetime.utcnow().isoformat()}
     if note.title is not None:
         update_data["title"] = note.title
     if note.content is not None:
@@ -283,43 +288,31 @@ async def update_note(note_id: str, note: NoteUpdate, current_user: dict = Depen
     if note.pinned is not None:
         update_data["pinned"] = note.pinned
     
-    result = await db.notes.update_one(
-        {"_id": ObjectId(note_id), "user_id": current_user["id"]},
-        {"$set": update_data}
-    )
-    if result.matched_count == 0:
+    supabase.table("notes").update(update_data).eq("id", note_id).eq("user_id", current_user["id"]).execute()
+    result = supabase.table("notes").select("*").eq("id", note_id).execute()
+    if not result.data:
         raise HTTPException(status_code=404, detail="Note not found")
-    
-    updated_note = await db.notes.find_one({"_id": ObjectId(note_id)})
-    return serialize_doc(updated_note)
+    return result.data[0]
 
 @app.delete("/api/notes/{note_id}")
 async def delete_note(note_id: str, current_user: dict = Depends(get_current_user)):
-    result = await db.notes.delete_one({
-        "_id": ObjectId(note_id),
-        "user_id": current_user["id"]
-    })
-    if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Note not found")
+    supabase.table("notes").delete().eq("id", note_id).eq("user_id", current_user["id"]).execute()
     return {"message": "Note deleted"}
 
 # ============== AI ENDPOINTS ==============
 
 @app.post("/api/notes/{note_id}/summarize")
 async def summarize_note(note_id: str, current_user: dict = Depends(get_current_user)):
-    note = await db.notes.find_one({
-        "_id": ObjectId(note_id),
-        "user_id": current_user["id"]
-    })
-    if not note:
+    result = supabase.table("notes").select("*").eq("id", note_id).eq("user_id", current_user["id"]).execute()
+    if not result.data:
         raise HTTPException(status_code=404, detail="Note not found")
+    note = result.data[0]
     
     if not EMERGENT_LLM_KEY:
         raise HTTPException(status_code=500, detail="AI service not configured")
     
     try:
         from emergentintegrations.llm.chat import LlmChat, UserMessage
-        
         chat = LlmChat(
             api_key=EMERGENT_LLM_KEY,
             session_id=f"summarize-{note_id}",
@@ -328,26 +321,22 @@ async def summarize_note(note_id: str, current_user: dict = Depends(get_current_
         
         message = UserMessage(text=f"Please summarize this note:\n\nTitle: {note['title']}\n\nContent: {note['content']}")
         summary = await chat.send_message(message)
-        
         return {"summary": summary}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI error: {str(e)}")
 
 @app.post("/api/notes/{note_id}/suggest-tags")
 async def suggest_tags(note_id: str, current_user: dict = Depends(get_current_user)):
-    note = await db.notes.find_one({
-        "_id": ObjectId(note_id),
-        "user_id": current_user["id"]
-    })
-    if not note:
+    result = supabase.table("notes").select("*").eq("id", note_id).eq("user_id", current_user["id"]).execute()
+    if not result.data:
         raise HTTPException(status_code=404, detail="Note not found")
+    note = result.data[0]
     
     if not EMERGENT_LLM_KEY:
         raise HTTPException(status_code=500, detail="AI service not configured")
     
     try:
         from emergentintegrations.llm.chat import LlmChat, UserMessage
-        
         chat = LlmChat(
             api_key=EMERGENT_LLM_KEY,
             session_id=f"tags-{note_id}",
@@ -356,7 +345,6 @@ async def suggest_tags(note_id: str, current_user: dict = Depends(get_current_us
         
         message = UserMessage(text=f"Suggest tags for this note:\n\nTitle: {note['title']}\n\nContent: {note['content']}")
         response = await chat.send_message(message)
-        
         tags = [tag.strip().lower() for tag in response.split(",") if tag.strip()]
         return {"tags": tags[:5]}
     except Exception as e:
@@ -367,34 +355,21 @@ async def get_daily_briefing(current_user: dict = Depends(get_current_user)):
     today = datetime.utcnow().strftime("%Y-%m-%d")
     
     # Get today's events
-    events = await db.events.find({
-        "user_id": current_user["id"],
-        "date": today
-    }).to_list(length=10)
+    events_result = supabase.table("events").select("*").eq("user_id", current_user["id"]).eq("date", today).execute()
+    events = events_result.data or []
     
     # Get pending reminders
-    reminders = await db.reminders.find({
-        "user_id": current_user["id"],
-        "completed": False
-    }).to_list(length=10)
+    reminders_result = supabase.table("reminders").select("*").eq("user_id", current_user["id"]).eq("completed", False).execute()
+    reminders = reminders_result.data or []
     
     # Get pinned notes count
-    pinned_count = await db.notes.count_documents({
-        "user_id": current_user["id"],
-        "pinned": True
-    })
+    pinned_result = supabase.table("notes").select("id").eq("user_id", current_user["id"]).eq("pinned", True).execute()
+    pinned_count = len(pinned_result.data) if pinned_result.data else 0
     
-    # Mock weather data
-    weather = {
-        "temperature": 72,
-        "condition": "Partly Cloudy",
-        "high": 78,
-        "low": 65,
-        "icon": "partly-cloudy"
-    }
+    # Mock weather
+    weather = {"temperature": 72, "condition": "Partly Cloudy", "high": 78, "low": 65, "icon": "partly-cloudy"}
     
     if not EMERGENT_LLM_KEY:
-        # Return basic briefing without AI
         return {
             "briefing": f"Good day, {current_user['name']}! You have {len(events)} events and {len(reminders)} pending tasks today.",
             "events_count": len(events),
@@ -405,7 +380,6 @@ async def get_daily_briefing(current_user: dict = Depends(get_current_user)):
     
     try:
         from emergentintegrations.llm.chat import LlmChat, UserMessage
-        
         events_text = "\n".join([f"- {e['title']} at {e.get('start_time', 'TBD')}" for e in events]) or "No events scheduled"
         reminders_text = "\n".join([f"- {r['title']}" for r in reminders]) or "No pending reminders"
         
@@ -415,20 +389,7 @@ async def get_daily_briefing(current_user: dict = Depends(get_current_user)):
             system_message="You are a friendly personal assistant providing a brief, motivating daily summary. Keep it under 3 sentences."
         ).with_model("gemini", "gemini-2.5-flash")
         
-        message = UserMessage(
-            text=f"""Create a brief daily summary for {current_user['name']}:
-
-Today's Events:
-{events_text}
-
-Pending Tasks:
-{reminders_text}
-
-Weather: {weather['temperature']}°F, {weather['condition']}
-
-Pinned Notes: {pinned_count}"""
-        )
-        
+        message = UserMessage(text=f"Create a brief daily summary for {current_user['name']}:\n\nToday's Events:\n{events_text}\n\nPending Tasks:\n{reminders_text}\n\nWeather: {weather['temperature']}°F, {weather['condition']}\n\nPinned Notes: {pinned_count}")
         briefing = await chat.send_message(message)
         
         return {
@@ -438,7 +399,7 @@ Pinned Notes: {pinned_count}"""
             "pinned_notes_count": pinned_count,
             "weather": weather
         }
-    except Exception as e:
+    except:
         return {
             "briefing": f"Good day, {current_user['name']}! You have {len(events)} events and {len(reminders)} pending tasks today.",
             "events_count": len(events),
@@ -450,48 +411,35 @@ Pinned Notes: {pinned_count}"""
 # ============== EVENTS ENDPOINTS ==============
 
 @app.get("/api/events")
-async def get_events(
-    date: Optional[str] = None,
-    month: Optional[str] = None,
-    current_user: dict = Depends(get_current_user)
-):
-    query = {"user_id": current_user["id"]}
+async def get_events(date: Optional[str] = None, month: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    query = supabase.table("events").select("*").eq("user_id", current_user["id"])
     
     if date:
-        query["date"] = date
-    elif month:
-        # Get events for a specific month (format: YYYY-MM)
-        query["date"] = {"$regex": f"^{month}"}
+        query = query.eq("date", date)
     
-    cursor = db.events.find(query).sort("date", 1)
-    events = await cursor.to_list(length=100)
-    return [serialize_doc(event) for event in events]
+    result = query.order("date").execute()
+    events = result.data or []
+    
+    if month:
+        events = [e for e in events if e.get("date", "").startswith(month)]
+    
+    return events
 
 @app.post("/api/events")
 async def create_event(event: EventCreate, current_user: dict = Depends(get_current_user)):
+    event_id = str(uuid.uuid4())
     event_doc = {
+        "id": event_id,
         "user_id": current_user["id"],
         "title": event.title,
         "description": event.description,
         "date": event.date,
         "start_time": event.start_time,
         "end_time": event.end_time,
-        "linked_note_id": event.linked_note_id,
-        "created_at": datetime.utcnow()
+        "created_at": datetime.utcnow().isoformat()
     }
-    result = await db.events.insert_one(event_doc)
-    event_doc["_id"] = result.inserted_id
-    return serialize_doc(event_doc)
-
-@app.get("/api/events/{event_id}")
-async def get_event(event_id: str, current_user: dict = Depends(get_current_user)):
-    event = await db.events.find_one({
-        "_id": ObjectId(event_id),
-        "user_id": current_user["id"]
-    })
-    if not event:
-        raise HTTPException(status_code=404, detail="Event not found")
-    return serialize_doc(event)
+    supabase.table("events").insert(event_doc).execute()
+    return event_doc
 
 @app.put("/api/events/{event_id}")
 async def update_event(event_id: str, event: EventUpdate, current_user: dict = Depends(get_current_user)):
@@ -506,57 +454,41 @@ async def update_event(event_id: str, event: EventUpdate, current_user: dict = D
         update_data["start_time"] = event.start_time
     if event.end_time is not None:
         update_data["end_time"] = event.end_time
-    if event.linked_note_id is not None:
-        update_data["linked_note_id"] = event.linked_note_id
     
-    result = await db.events.update_one(
-        {"_id": ObjectId(event_id), "user_id": current_user["id"]},
-        {"$set": update_data}
-    )
-    if result.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Event not found")
-    
-    updated_event = await db.events.find_one({"_id": ObjectId(event_id)})
-    return serialize_doc(updated_event)
+    supabase.table("events").update(update_data).eq("id", event_id).eq("user_id", current_user["id"]).execute()
+    result = supabase.table("events").select("*").eq("id", event_id).execute()
+    return result.data[0] if result.data else {}
 
 @app.delete("/api/events/{event_id}")
 async def delete_event(event_id: str, current_user: dict = Depends(get_current_user)):
-    result = await db.events.delete_one({
-        "_id": ObjectId(event_id),
-        "user_id": current_user["id"]
-    })
-    if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Event not found")
+    supabase.table("events").delete().eq("id", event_id).eq("user_id", current_user["id"]).execute()
     return {"message": "Event deleted"}
 
 # ============== REMINDERS ENDPOINTS ==============
 
 @app.get("/api/reminders")
-async def get_reminders(
-    completed: Optional[bool] = None,
-    current_user: dict = Depends(get_current_user)
-):
-    query = {"user_id": current_user["id"]}
+async def get_reminders(completed: Optional[bool] = None, current_user: dict = Depends(get_current_user)):
+    query = supabase.table("reminders").select("*").eq("user_id", current_user["id"])
     
     if completed is not None:
-        query["completed"] = completed
+        query = query.eq("completed", completed)
     
-    cursor = db.reminders.find(query).sort([("completed", 1), ("created_at", -1)])
-    reminders = await cursor.to_list(length=100)
-    return [serialize_doc(reminder) for reminder in reminders]
+    result = query.order("completed").order("created_at", desc=True).execute()
+    return result.data or []
 
 @app.post("/api/reminders")
 async def create_reminder(reminder: ReminderCreate, current_user: dict = Depends(get_current_user)):
+    reminder_id = str(uuid.uuid4())
     reminder_doc = {
+        "id": reminder_id,
         "user_id": current_user["id"],
         "title": reminder.title,
         "completed": False,
         "due_date": reminder.due_date,
-        "created_at": datetime.utcnow()
+        "created_at": datetime.utcnow().isoformat()
     }
-    result = await db.reminders.insert_one(reminder_doc)
-    reminder_doc["_id"] = result.inserted_id
-    return serialize_doc(reminder_doc)
+    supabase.table("reminders").insert(reminder_doc).execute()
+    return reminder_doc
 
 @app.put("/api/reminders/{reminder_id}")
 async def update_reminder(reminder_id: str, reminder: ReminderUpdate, current_user: dict = Depends(get_current_user)):
@@ -568,38 +500,24 @@ async def update_reminder(reminder_id: str, reminder: ReminderUpdate, current_us
     if reminder.due_date is not None:
         update_data["due_date"] = reminder.due_date
     
-    result = await db.reminders.update_one(
-        {"_id": ObjectId(reminder_id), "user_id": current_user["id"]},
-        {"$set": update_data}
-    )
-    if result.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Reminder not found")
-    
-    updated_reminder = await db.reminders.find_one({"_id": ObjectId(reminder_id)})
-    return serialize_doc(updated_reminder)
+    supabase.table("reminders").update(update_data).eq("id", reminder_id).eq("user_id", current_user["id"]).execute()
+    result = supabase.table("reminders").select("*").eq("id", reminder_id).execute()
+    return result.data[0] if result.data else {}
 
 @app.delete("/api/reminders/{reminder_id}")
 async def delete_reminder(reminder_id: str, current_user: dict = Depends(get_current_user)):
-    result = await db.reminders.delete_one({
-        "_id": ObjectId(reminder_id),
-        "user_id": current_user["id"]
-    })
-    if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Reminder not found")
+    supabase.table("reminders").delete().eq("id", reminder_id).eq("user_id", current_user["id"]).execute()
     return {"message": "Reminder deleted"}
 
 @app.delete("/api/reminders/completed/clear")
 async def clear_completed_reminders(current_user: dict = Depends(get_current_user)):
-    result = await db.reminders.delete_many({
-        "user_id": current_user["id"],
-        "completed": True
-    })
-    return {"deleted_count": result.deleted_count}
+    result = supabase.table("reminders").delete().eq("user_id", current_user["id"]).eq("completed", True).execute()
+    return {"deleted_count": len(result.data) if result.data else 0}
 
 # Health check
 @app.get("/api/health")
 async def health_check():
-    return {"status": "healthy", "service": "LifeFlow API"}
+    return {"status": "healthy", "service": "LifeFlow API", "backend": "Supabase"}
 
 if __name__ == "__main__":
     import uvicorn
