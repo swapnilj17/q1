@@ -51,8 +51,15 @@ class ApiService {
     return this.request('/api/auth/me');
   }
 
-  async updateTheme(theme: 'light' | 'dark'): Promise<{ theme_preference: string }> {
-    return this.request(`/api/auth/theme?theme=${theme}`, {
+  async updateProfile(data: { name?: string; avatar_url?: string; theme_preference?: string }): Promise<User> {
+    return this.request('/api/auth/profile', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateSubscription(plan: 'free' | 'pro'): Promise<{ subscription: string }> {
+    return this.request(`/api/auth/subscription?plan=${plan}`, {
       method: 'PUT',
     });
   }

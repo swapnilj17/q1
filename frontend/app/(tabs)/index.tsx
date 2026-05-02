@@ -17,8 +17,8 @@ import { api } from '@/services/api';
 import { Note, DailyBriefing } from '@/types';
 
 export default function DashboardScreen() {
-  const { user, logout } = useAuth();
-  const { colors, theme, toggleTheme } = useTheme();
+  const { user } = useAuth();
+  const { colors } = useTheme();
   const router = useRouter();
   const [briefing, setBriefing] = useState<DailyBriefing | null>(null);
   const [pinnedNotes, setPinnedNotes] = useState<Note[]>([]);
@@ -55,25 +55,16 @@ export default function DashboardScreen() {
 
   const getWeatherIcon = (condition: string) => {
     switch (condition.toLowerCase()) {
-      case 'sunny':
-      case 'clear':
-        return 'sunny';
-      case 'cloudy':
-        return 'cloudy';
-      case 'partly cloudy':
-        return 'partly-sunny';
-      case 'rainy':
-        return 'rainy';
-      default:
-        return 'partly-sunny';
+      case 'sunny': case 'clear': return 'sunny';
+      case 'cloudy': return 'cloudy';
+      case 'partly cloudy': return 'partly-sunny';
+      case 'rainy': return 'rainy';
+      default: return 'partly-sunny';
     }
   };
 
   const styles = StyleSheet.create({
-    container: {
-      flex: 1,
-      backgroundColor: colors.background,
-    },
+    container: { flex: 1, backgroundColor: colors.background },
     header: {
       flexDirection: 'row',
       justifyContent: 'space-between',
@@ -81,32 +72,9 @@ export default function DashboardScreen() {
       paddingHorizontal: 20,
       paddingVertical: 16,
     },
-    greeting: {
-      fontSize: 24,
-      fontWeight: '700',
-      color: colors.text,
-    },
-    date: {
-      fontSize: 14,
-      color: colors.textSecondary,
-      marginTop: 4,
-    },
-    headerActions: {
-      flexDirection: 'row',
-      gap: 12,
-    },
-    iconButton: {
-      width: 44,
-      height: 44,
-      borderRadius: 12,
-      backgroundColor: colors.surface,
-      justifyContent: 'center',
-      alignItems: 'center',
-    },
-    content: {
-      flex: 1,
-      paddingHorizontal: 20,
-    },
+    greeting: { fontSize: 24, fontWeight: '700', color: colors.text },
+    date: { fontSize: 14, color: colors.textSecondary, marginTop: 4 },
+    content: { flex: 1, paddingHorizontal: 20 },
     card: {
       backgroundColor: colors.card,
       borderRadius: 16,
@@ -118,31 +86,11 @@ export default function DashboardScreen() {
       shadowRadius: 8,
       elevation: 2,
     },
-    cardTitle: {
-      fontSize: 16,
-      fontWeight: '600',
-      color: colors.text,
-      marginBottom: 12,
-    },
-    briefingCard: {
-      backgroundColor: colors.primary,
-    },
-    briefingTitle: {
-      color: '#FFFFFF',
-      fontSize: 18,
-      fontWeight: '600',
-      marginBottom: 8,
-    },
-    briefingText: {
-      color: 'rgba(255,255,255,0.9)',
-      fontSize: 14,
-      lineHeight: 22,
-    },
-    statsRow: {
-      flexDirection: 'row',
-      marginTop: 16,
-      gap: 12,
-    },
+    cardTitle: { fontSize: 16, fontWeight: '600', color: colors.text, marginBottom: 12 },
+    briefingCard: { backgroundColor: colors.primary },
+    briefingTitle: { color: '#FFFFFF', fontSize: 18, fontWeight: '600', marginBottom: 8 },
+    briefingText: { color: 'rgba(255,255,255,0.9)', fontSize: 14, lineHeight: 22 },
+    statsRow: { flexDirection: 'row', marginTop: 16, gap: 12 },
     statItem: {
       flex: 1,
       backgroundColor: 'rgba(255,255,255,0.15)',
@@ -150,20 +98,9 @@ export default function DashboardScreen() {
       padding: 12,
       alignItems: 'center',
     },
-    statNumber: {
-      fontSize: 24,
-      fontWeight: '700',
-      color: '#FFFFFF',
-    },
-    statLabel: {
-      fontSize: 11,
-      color: 'rgba(255,255,255,0.8)',
-      marginTop: 4,
-    },
-    weatherCard: {
-      flexDirection: 'row',
-      alignItems: 'center',
-    },
+    statNumber: { fontSize: 24, fontWeight: '700', color: '#FFFFFF' },
+    statLabel: { fontSize: 11, color: 'rgba(255,255,255,0.8)', marginTop: 4 },
+    weatherCard: { flexDirection: 'row', alignItems: 'center' },
     weatherIcon: {
       width: 60,
       height: 60,
@@ -173,23 +110,10 @@ export default function DashboardScreen() {
       alignItems: 'center',
       marginRight: 16,
     },
-    weatherInfo: {
-      flex: 1,
-    },
-    temperature: {
-      fontSize: 28,
-      fontWeight: '700',
-      color: colors.text,
-    },
-    condition: {
-      fontSize: 14,
-      color: colors.textSecondary,
-    },
-    highLow: {
-      fontSize: 12,
-      color: colors.textSecondary,
-      marginTop: 4,
-    },
+    weatherInfo: { flex: 1 },
+    temperature: { fontSize: 28, fontWeight: '700', color: colors.text },
+    condition: { fontSize: 14, color: colors.textSecondary },
+    highLow: { fontSize: 12, color: colors.textSecondary, marginTop: 4 },
     pinnedNote: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -197,20 +121,9 @@ export default function DashboardScreen() {
       borderBottomWidth: 1,
       borderBottomColor: colors.border,
     },
-    pinnedNoteIcon: {
-      marginRight: 12,
-    },
-    pinnedNoteTitle: {
-      flex: 1,
-      fontSize: 14,
-      color: colors.text,
-    },
-    emptyText: {
-      fontSize: 14,
-      color: colors.textSecondary,
-      textAlign: 'center',
-      paddingVertical: 16,
-    },
+    pinnedNoteIcon: { marginRight: 12 },
+    pinnedNoteTitle: { flex: 1, fontSize: 14, color: colors.text },
+    emptyText: { fontSize: 14, color: colors.textSecondary, textAlign: 'center', paddingVertical: 16 },
     fab: {
       position: 'absolute',
       bottom: 20,
@@ -240,23 +153,9 @@ export default function DashboardScreen() {
       shadowRadius: 12,
       elevation: 8,
     },
-    fabMenuItem: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      padding: 12,
-      borderRadius: 8,
-    },
-    fabMenuText: {
-      marginLeft: 12,
-      fontSize: 14,
-      fontWeight: '500',
-      color: colors.text,
-    },
-    loader: {
-      flex: 1,
-      justifyContent: 'center',
-      alignItems: 'center',
-    },
+    fabMenuItem: { flexDirection: 'row', alignItems: 'center', padding: 12, borderRadius: 8 },
+    fabMenuText: { marginLeft: 12, fontSize: 14, fontWeight: '500', color: colors.text },
+    loader: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   });
 
   if (isLoading) {
@@ -283,34 +182,18 @@ export default function DashboardScreen() {
           <Text style={styles.greeting}>Hello, {user?.name?.split(' ')[0]}!</Text>
           <Text style={styles.date}>{dateString}</Text>
         </View>
-        <View style={styles.headerActions}>
-          <TouchableOpacity style={styles.iconButton} onPress={toggleTheme}>
-            <Ionicons
-              name={theme === 'light' ? 'moon' : 'sunny'}
-              size={22}
-              color={colors.text}
-            />
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.iconButton} onPress={logout}>
-            <Ionicons name="log-out-outline" size={22} color={colors.text} />
-          </TouchableOpacity>
-        </View>
       </View>
 
       <ScrollView
         style={styles.content}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-        }
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         showsVerticalScrollIndicator={false}
       >
         {/* AI Briefing Card */}
         <View style={[styles.card, styles.briefingCard]}>
           <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
             <Ionicons name="sparkles" size={20} color="#FFFFFF" />
-            <Text style={[styles.briefingTitle, { marginLeft: 8, marginBottom: 0 }]}>
-              Today's Briefing
-            </Text>
+            <Text style={[styles.briefingTitle, { marginLeft: 8, marginBottom: 0 }]}>Today's Briefing</Text>
           </View>
           <Text style={styles.briefingText}>
             {briefing?.briefing || 'Loading your daily briefing...'}
@@ -337,18 +220,12 @@ export default function DashboardScreen() {
             <Text style={styles.cardTitle}>Weather</Text>
             <View style={styles.weatherCard}>
               <View style={styles.weatherIcon}>
-                <Ionicons
-                  name={getWeatherIcon(briefing.weather.condition) as any}
-                  size={28}
-                  color={colors.primary}
-                />
+                <Ionicons name={getWeatherIcon(briefing.weather.condition) as any} size={28} color={colors.primary} />
               </View>
               <View style={styles.weatherInfo}>
                 <Text style={styles.temperature}>{briefing.weather.temperature}°F</Text>
                 <Text style={styles.condition}>{briefing.weather.condition}</Text>
-                <Text style={styles.highLow}>
-                  H: {briefing.weather.high}° L: {briefing.weather.low}°
-                </Text>
+                <Text style={styles.highLow}>H: {briefing.weather.high}° L: {briefing.weather.low}°</Text>
               </View>
             </View>
           </View>
@@ -368,21 +245,11 @@ export default function DashboardScreen() {
             pinnedNotes.slice(0, 5).map((note, index) => (
               <TouchableOpacity
                 key={note.id}
-                style={[
-                  styles.pinnedNote,
-                  index === Math.min(pinnedNotes.length - 1, 4) && { borderBottomWidth: 0 },
-                ]}
+                style={[styles.pinnedNote, index === Math.min(pinnedNotes.length - 1, 4) && { borderBottomWidth: 0 }]}
                 onPress={() => router.push(`/note/${note.id}`)}
               >
-                <Ionicons
-                  name="pin"
-                  size={16}
-                  color={colors.accent}
-                  style={styles.pinnedNoteIcon}
-                />
-                <Text style={styles.pinnedNoteTitle} numberOfLines={1}>
-                  {note.title}
-                </Text>
+                <Ionicons name="pin" size={16} color={colors.accent} style={styles.pinnedNoteIcon} />
+                <Text style={styles.pinnedNoteTitle} numberOfLines={1}>{note.title}</Text>
                 <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
               </TouchableOpacity>
             ))
@@ -395,44 +262,22 @@ export default function DashboardScreen() {
       {/* FAB Menu */}
       {showFab && (
         <View style={styles.fabMenu}>
-          <TouchableOpacity
-            style={styles.fabMenuItem}
-            onPress={() => {
-              setShowFab(false);
-              router.push('/note/new');
-            }}
-          >
+          <TouchableOpacity style={styles.fabMenuItem} onPress={() => { setShowFab(false); router.push('/note/new'); }}>
             <Ionicons name="document-text" size={20} color={colors.primary} />
             <Text style={styles.fabMenuText}>New Note</Text>
           </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.fabMenuItem}
-            onPress={() => {
-              setShowFab(false);
-              router.push('/(tabs)/calendar');
-            }}
-          >
+          <TouchableOpacity style={styles.fabMenuItem} onPress={() => { setShowFab(false); router.push('/(tabs)/calendar'); }}>
             <Ionicons name="calendar" size={20} color={colors.accent} />
             <Text style={styles.fabMenuText}>New Event</Text>
           </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.fabMenuItem}
-            onPress={() => {
-              setShowFab(false);
-              router.push('/(tabs)/reminders');
-            }}
-          >
+          <TouchableOpacity style={styles.fabMenuItem} onPress={() => { setShowFab(false); router.push('/(tabs)/reminders'); }}>
             <Ionicons name="checkbox" size={20} color={colors.warning} />
-            <Text style={styles.fabMenuText}>New Reminder</Text>
+            <Text style={styles.fabMenuText}>New Task</Text>
           </TouchableOpacity>
         </View>
       )}
 
-      <TouchableOpacity
-        style={styles.fab}
-        onPress={() => setShowFab(!showFab)}
-        activeOpacity={0.8}
-      >
+      <TouchableOpacity style={styles.fab} onPress={() => setShowFab(!showFab)} activeOpacity={0.8}>
         <Ionicons name={showFab ? 'close' : 'add'} size={28} color="#FFFFFF" />
       </TouchableOpacity>
     </SafeAreaView>

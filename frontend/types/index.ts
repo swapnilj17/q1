@@ -2,7 +2,9 @@ export interface User {
   id: string;
   email: string;
   name: string;
+  avatar_url?: string;
   theme_preference: 'light' | 'dark';
+  subscription: 'free' | 'pro';
 }
 
 export interface Note {
@@ -25,7 +27,6 @@ export interface Event {
   date: string;
   start_time?: string;
   end_time?: string;
-  linked_note_id?: string;
   created_at: string;
 }
 
