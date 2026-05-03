@@ -166,6 +166,66 @@ class ApiService {
   async getDailyBriefing(): Promise<DailyBriefing> {
     return this.request('/api/dashboard/briefing');
   }
+
+  // ============== CHAT ==============
+  async listChatUsers(search?: string): Promise<ChatUser[]> {
+    const q = search ? `?search=${encodeURIComponent(search)}` : '';
+    return this.request(`/api/chat/users${q}`);
+  }
+
+  async listChatRooms(): Promise<ChatRoom[]> {
+    return this.request('/api/chat/rooms');
+  }
+
+  async getChatRoom(roomId: string): Promise<ChatRoom> {
+    return this.request(`/api/chat/rooms/${roomId}`);
+  }
+
+  async createChatRoom(memberIds: string[], isGroup = false, name?: string): Promise<ChatRoom> {
+    return this.request('/api/chat/rooms', {
+      method: 'POST',
+      body: JSON.stringify({ member_ids: memberIds, is_group: isGroup, name }),
+    });
+  }
+
+  async getChatMessages(roomId: string, limit = 100): Promise<ChatMessage[]> {
+    return this.request(`/api/chat/rooms/${roomId}/messages?limit=${limit}`);
+  }
+
+  async sendChatMessage(roomId: string, content: string): Promise<ChatMessage> {
+    return this.request(`/api/chat/rooms/${roomId}/messages`, {
+      method: 'POST',
+      body: JSON.stringify({ content }),
+    });
+  }
+}
+
+export interface ChatUser {
+  id: string;
+  email: string;
+  name: string;
+  avatar_url?: string | null;
+}
+
+export interface ChatRoom {
+  id: string;
+  name?: string | null;
+  is_group: boolean;
+  created_by?: string | null;
+  created_at: string;
+  last_message_at: string;
+  last_message_preview?: string | null;
+  members: ChatUser[];
+  display_name: string;
+  display_avatar?: string | null;
+}
+
+export interface ChatMessage {
+  id: string;
+  room_id: string;
+  sender_id: string;
+  content: string;
+  created_at: string;
 }
 
 export const api = new ApiService();

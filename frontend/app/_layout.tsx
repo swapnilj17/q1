@@ -18,6 +18,8 @@ export default function RootLayout() {
             <Stack.Screen name="(tabs)" />
             <Stack.Screen name="profile" options={{ presentation: 'modal' }} />
             <Stack.Screen name="note/[id]" options={{ presentation: 'modal' }} />
+            <Stack.Screen name="chat/[id]" options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="chat/new" options={{ presentation: 'modal' }} />
           </Stack>
         </ThemeProvider>
       </AuthProvider>

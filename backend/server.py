@@ -514,6 +514,165 @@ async def clear_completed_reminders(current_user: dict = Depends(get_current_use
     result = supabase.table("reminders").delete().eq("user_id", current_user["id"]).eq("completed", True).execute()
     return {"deleted_count": len(result.data) if result.data else 0}
 
+# ============== CHAT ENDPOINTS ==============
+
+class ChatRoomCreate(BaseModel):
+    member_ids: List[str] = Field(min_length=1)  # excluding current user
+    name: Optional[str] = None
+    is_group: bool = False
+
+class ChatMessageCreate(BaseModel):
+    content: str = Field(min_length=1, max_length=4000)
+
+@app.get("/api/chat/users")
+async def list_chat_users(
+    search: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """List other users available to chat with."""
+    query = supabase.table("users").select("id, email, name, avatar_url").neq("id", current_user["id"])
+    result = query.execute()
+    users = result.data or []
+    if search:
+        s = search.lower()
+        users = [u for u in users if s in (u.get("name") or "").lower() or s in (u.get("email") or "").lower()]
+    return users[:100]
+
+def _hydrate_room(room: dict, current_user_id: str):
+    """Attach members (excluding current user for DMs) and display name/avatar."""
+    room_id = room["id"]
+    members = supabase.table("chat_room_members").select("user_id").eq("room_id", room_id).execute().data or []
+    member_ids = [m["user_id"] for m in members]
+    users_res = supabase.table("users").select("id, email, name, avatar_url").in_("id", member_ids).execute().data or []
+    # Determine display
+    if room.get("is_group"):
+        display_name = room.get("name") or ", ".join([u["name"] for u in users_res if u["id"] != current_user_id][:3])
+        display_avatar = None
+    else:
+        other = next((u for u in users_res if u["id"] != current_user_id), None)
+        display_name = other["name"] if other else "Chat"
+        display_avatar = other.get("avatar_url") if other else None
+    return {
+        **room,
+        "members": users_res,
+        "display_name": display_name,
+        "display_avatar": display_avatar,
+    }
+
+@app.get("/api/chat/rooms")
+async def list_chat_rooms(current_user: dict = Depends(get_current_user)):
+    """List rooms the current user is a member of, ordered by last message."""
+    memberships = supabase.table("chat_room_members").select("room_id").eq("user_id", current_user["id"]).execute().data or []
+    room_ids = [m["room_id"] for m in memberships]
+    if not room_ids:
+        return []
+    rooms = supabase.table("chat_rooms").select("*").in_("id", room_ids).order("last_message_at", desc=True).execute().data or []
+    return [_hydrate_room(r, current_user["id"]) for r in rooms]
+
+@app.post("/api/chat/rooms")
+async def create_chat_room(body: ChatRoomCreate, current_user: dict = Depends(get_current_user)):
+    """Create a 1:1 or group chat. For 1:1, reuses existing room if one already exists."""
+    all_member_ids = list({*body.member_ids, current_user["id"]})
+    if len(all_member_ids) < 2:
+        raise HTTPException(status_code=400, detail="Need at least one other member")
+
+    # For a 1:1, attempt to find existing room containing exactly these two users
+    if not body.is_group and len(all_member_ids) == 2:
+        # Pull all rooms current user belongs to that are not groups
+        myrooms = supabase.table("chat_room_members").select("room_id").eq("user_id", current_user["id"]).execute().data or []
+        my_room_ids = [m["room_id"] for m in myrooms]
+        if my_room_ids:
+            rooms = supabase.table("chat_rooms").select("*").in_("id", my_room_ids).eq("is_group", False).execute().data or []
+            for r in rooms:
+                mems = supabase.table("chat_room_members").select("user_id").eq("room_id", r["id"]).execute().data or []
+                mids = sorted([m["user_id"] for m in mems])
+                if mids == sorted(all_member_ids):
+                    return _hydrate_room(r, current_user["id"])
+
+    # Create new room
+    room_id = str(uuid.uuid4())
+    now = datetime.utcnow().isoformat()
+    supabase.table("chat_rooms").insert({
+        "id": room_id,
+        "name": body.name,
+        "is_group": body.is_group or len(all_member_ids) > 2,
+        "created_by": current_user["id"],
+        "created_at": now,
+        "last_message_at": now,
+    }).execute()
+    # Add all members
+    supabase.table("chat_room_members").insert([
+        {"room_id": room_id, "user_id": uid, "joined_at": now} for uid in all_member_ids
+    ]).execute()
+    created = supabase.table("chat_rooms").select("*").eq("id", room_id).execute().data[0]
+    return _hydrate_room(created, current_user["id"])
+
+def _assert_member(room_id: str, user_id: str):
+    r = supabase.table("chat_room_members").select("user_id").eq("room_id", room_id).eq("user_id", user_id).execute().data or []
+    if not r:
+        raise HTTPException(status_code=403, detail="Not a member of this room")
+
+@app.get("/api/chat/rooms/{room_id}")
+async def get_chat_room(room_id: str, current_user: dict = Depends(get_current_user)):
+    _assert_member(room_id, current_user["id"])
+    room = supabase.table("chat_rooms").select("*").eq("id", room_id).execute().data
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+    return _hydrate_room(room[0], current_user["id"])
+
+@app.get("/api/chat/rooms/{room_id}/messages")
+async def get_chat_messages(
+    room_id: str,
+    limit: int = 100,
+    current_user: dict = Depends(get_current_user)
+):
+    _assert_member(room_id, current_user["id"])
+    msgs = (
+        supabase.table("chat_messages")
+        .select("*")
+        .eq("room_id", room_id)
+        .order("created_at", desc=False)
+        .limit(limit)
+        .execute()
+        .data
+        or []
+    )
+    return msgs
+
+@app.post("/api/chat/rooms/{room_id}/messages")
+async def send_chat_message(
+    room_id: str,
+    body: ChatMessageCreate,
+    current_user: dict = Depends(get_current_user),
+):
+    _assert_member(room_id, current_user["id"])
+    msg_id = str(uuid.uuid4())
+    now = datetime.utcnow().isoformat()
+    content = body.content.strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty message")
+
+    supabase.table("chat_messages").insert({
+        "id": msg_id,
+        "room_id": room_id,
+        "sender_id": current_user["id"],
+        "content": content,
+        "created_at": now,
+    }).execute()
+    # Update room metadata for list preview
+    supabase.table("chat_rooms").update({
+        "last_message_at": now,
+        "last_message_preview": content[:120],
+    }).eq("id", room_id).execute()
+
+    return {
+        "id": msg_id,
+        "room_id": room_id,
+        "sender_id": current_user["id"],
+        "content": content,
+        "created_at": now,
+    }
+
 # Health check
 @app.get("/api/health")
 async def health_check():
