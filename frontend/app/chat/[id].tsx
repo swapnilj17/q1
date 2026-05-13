@@ -81,36 +81,27 @@ export default function ChatRoomScreen() {
     return () => { alive = false; };
   }, [roomId]);
 
-  // Supabase Broadcast realtime — no SQL publication changes needed
+  // Supabase Realtime — postgres_changes subscription (native WebSocket on mobile)
   useEffect(() => {
     if (!roomId) return;
-
     const channel = supabase
-      .channel(`room-broadcast:${roomId}`, { config: { broadcast: { self: false } } })
-      .on('broadcast', { event: 'new_message' }, ({ payload }) => {
-        const msg = payload as ChatMessage;
-        setMessages((curr) => {
-          if (curr.find((m) => m.id === msg.id)) return curr;
-          return [...curr, msg];
-        });
-      })
+      .channel(`room:${roomId}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'chat_messages', filter: `room_id=eq.${roomId}` },
+        (payload) => {
+          const msg = payload.new as ChatMessage;
+          setMessages((curr) => {
+            // Avoid duplicate when local echo has already inserted it
+            if (curr.find((m) => m.id === msg.id)) return curr;
+            return [...curr, msg];
+          });
+        }
+      )
       .subscribe();
-
-    // Polling fallback every 6 s to catch messages sent from other devices
-    const poll = setInterval(async () => {
-      try {
-        const latest = await api.getChatMessages(roomId, 100);
-        setMessages((curr) => {
-          const ids = new Set(curr.map((m) => m.id));
-          const newOnes = latest.filter((m) => !ids.has(m.id));
-          return newOnes.length ? [...curr, ...newOnes] : curr;
-        });
-      } catch { /* ignore */ }
-    }, 6000);
 
     return () => {
       supabase.removeChannel(channel);
-      clearInterval(poll);
     };
   }, [roomId]);
 
@@ -131,12 +122,6 @@ export default function ChatRoomScreen() {
       const saved = await api.sendChatMessage(roomId, trimmed);
       // Replace optimistic with saved
       setMessages((curr) => curr.map((m) => (m.id === optimistic.id ? saved : m)));
-      // Broadcast to all subscribers in the room (realtime push to other users)
-      supabase.channel(`room-broadcast:${roomId}`).send({
-        type: 'broadcast',
-        event: 'new_message',
-        payload: saved,
-      }).catch(() => { /* broadcast is best-effort */ });
     } catch (e) {
       console.error('Send failed', e);
       setMessages((curr) => curr.filter((m) => m.id !== optimistic.id));
