@@ -192,10 +192,15 @@ class ApiService {
     return this.request(`/api/chat/rooms/${roomId}/messages?limit=${limit}`);
   }
 
-  async sendChatMessage(roomId: string, content: string): Promise<ChatMessage> {
+  async sendChatMessage(roomId: string, content: string, mediaUrl?: string, mediaType?: string, mediaDuration?: number): Promise<ChatMessage> {
     return this.request(`/api/chat/rooms/${roomId}/messages`, {
       method: 'POST',
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({ 
+        content, 
+        media_url: mediaUrl,
+        media_type: mediaType,
+        media_duration: mediaDuration,
+      }),
     });
   }
 }
@@ -226,6 +231,9 @@ export interface ChatMessage {
   sender_id: string;
   content: string;
   created_at: string;
+  media_url?: string | null;
+  media_type?: 'voice' | 'video' | null;
+  media_duration?: number | null;
 }
 
 export const api = new ApiService();

@@ -11,8 +11,9 @@
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSMicrophoneUsageDescription": "Record voice notes for your ideas",
-        "NSCameraUsageDescription": "Capture video notes on the go"
+        "NSMicrophoneUsageDescription": "Send voice messages in chat",
+        "NSCameraUsageDescription": "Record video messages in chat",
+        "NSPhotoLibraryUsageDescription": "Share photos and videos in chat"
       }
     },
     "android": {
@@ -23,7 +24,9 @@
       "edgeToEdgeEnabled": true,
       "permissions": [
         "android.permission.RECORD_AUDIO",
-        "android.permission.CAMERA"
+        "android.permission.CAMERA",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE"
       ]
     },
     "web": {

@@ -526,7 +526,10 @@ class ChatRoomCreate(BaseModel):
     is_group: bool = False
 
 class ChatMessageCreate(BaseModel):
-    content: str = Field(min_length=1, max_length=4000)
+    content: str = Field(max_length=4000)
+    media_url: Optional[str] = None
+    media_type: Optional[str] = None  # 'voice' | 'video'
+    media_duration: Optional[int] = None  # milliseconds
 
 @app.get("/api/chat/users")
 async def list_chat_users(
@@ -652,30 +655,42 @@ async def send_chat_message(
     _assert_member(room_id, current_user["id"])
     msg_id = str(uuid.uuid4())
     now = datetime.utcnow().isoformat()
-    content = body.content.strip()
-    if not content:
-        raise HTTPException(status_code=400, detail="Empty message")
+    content = (body.content or "").strip()
+    
+    # For media messages, content can be empty (we'll use a placeholder)
+    if not content and not body.media_url:
+        raise HTTPException(status_code=400, detail="Message must have content or media")
+    
+    if not content and body.media_type == "voice":
+        content = "🎤 Voice message"
+    elif not content and body.media_type == "video":
+        content = "🎬 Video message"
 
-    supabase.table("chat_messages").insert({
-        "id": msg_id,
-        "room_id": room_id,
-        "sender_id": current_user["id"],
-        "content": content,
-        "created_at": now,
-    }).execute()
-    # Update room metadata for list preview
-    supabase.table("chat_rooms").update({
-        "last_message_at": now,
-        "last_message_preview": content[:120],
-    }).eq("id", room_id).execute()
-
-    return {
+    msg_data = {
         "id": msg_id,
         "room_id": room_id,
         "sender_id": current_user["id"],
         "content": content,
         "created_at": now,
     }
+    
+    # Add media fields if present
+    if body.media_url:
+        msg_data["media_url"] = body.media_url
+    if body.media_type:
+        msg_data["media_type"] = body.media_type
+    if body.media_duration:
+        msg_data["media_duration"] = body.media_duration
+
+    supabase.table("chat_messages").insert(msg_data).execute()
+    # Update room metadata for list preview
+    preview = content[:120] if content else ("🎤 Voice" if body.media_type == "voice" else "🎬 Video")
+    supabase.table("chat_rooms").update({
+        "last_message_at": now,
+        "last_message_preview": preview,
+    }).eq("id", room_id).execute()
+
+    return msg_data
 
 # Health check
 @app.get("/api/health")

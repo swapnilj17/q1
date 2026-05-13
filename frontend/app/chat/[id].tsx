@@ -1,22 +1,29 @@
-import React, { useEffect, useState, useRef, useCallback, memo } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   FlatList,
-  TouchableOpacity,
   TextInput,
+  TouchableOpacity,
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
+  Animated,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import * as Haptics from 'expo-haptics';
+import * as FileSystem from 'expo-file-system';
+
+import { useAuth } from '@/contexts/AuthContext';
 import { api, ChatMessage, ChatRoom } from '@/services/api';
 import { supabase } from '@/services/supabase';
-import { useAuth } from '@/contexts/AuthContext';
+import ChatVoiceMessage from '@/components/chat/ChatVoiceMessage';
+import ChatVideoMessage from '@/components/chat/ChatVideoMessage';
+import VoiceRecorder from '@/components/chat/VoiceRecorder';
+import VideoRecorder from '@/components/chat/VideoRecorder';
 
 const COLORS = {
   bg: '#0A0E14',
@@ -26,59 +33,57 @@ const COLORS = {
   textSecondary: '#94A3B8',
   neon: '#00C853',
   neonSoft: 'rgba(0,200,83,0.18)',
+  bubbleMe: 'rgba(0,200,83,0.18)',
   bubbleOther: 'rgba(255,255,255,0.09)',
 };
 
-function formatTime(iso: string) {
-  const d = new Date(iso);
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-}
+const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || '';
+const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || '';
 
-// Memoised message bubble to avoid re-renders when new messages stream in
-const MessageBubble = memo(({ msg, isMe }: { msg: ChatMessage; isMe: boolean }) => (
-  <View style={[styles.bubbleRow, { justifyContent: isMe ? 'flex-end' : 'flex-start' }]}>
-    <View style={[
-      styles.bubble,
-      isMe ? styles.bubbleMine : styles.bubbleTheirs,
-    ]}>
-      <Text style={[styles.bubbleText, isMe && { color: COLORS.textPrimary }]}>{msg.content}</Text>
-      <Text style={styles.bubbleTime}>{formatTime(msg.created_at)}</Text>
-    </View>
-  </View>
-));
-
-export default function ChatRoomScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
-  const roomId = String(id || '');
+export default function ChatRoom() {
+  const { id: roomId } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const { user } = useAuth();
+  const flatListRef = useRef<FlatList>(null);
 
   const [room, setRoom] = useState<ChatRoom | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
-  const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(true);
-  const listRef = useRef<FlatList>(null);
+  const [sending, setSending] = useState(false);
+  
+  // Voice/Video recording states
+  const [isRecordingVoice, setIsRecordingVoice] = useState(false);
+  const [showVideoRecorder, setShowVideoRecorder] = useState(false);
+  const [uploadingMedia, setUploadingMedia] = useState(false);
 
-  // Fetch initial room + messages
+  // Load room details
   useEffect(() => {
-    let alive = true;
+    if (!roomId) return;
     (async () => {
       try {
-        const [rm, msgs] = await Promise.all([
-          api.getChatRoom(roomId),
-          api.getChatMessages(roomId),
-        ]);
-        if (!alive) return;
-        setRoom(rm);
-        setMessages(msgs);
+        const r = await api.getChatRoom(roomId);
+        setRoom(r);
       } catch (e) {
-        console.error('Failed to load chat', e);
-      } finally {
-        if (alive) setLoading(false);
+        console.error('Failed to load room', e);
       }
     })();
-    return () => { alive = false; };
+  }, [roomId]);
+
+  // Load messages
+  useEffect(() => {
+    if (!roomId) return;
+    (async () => {
+      try {
+        setLoading(true);
+        const msgs = await api.getChatMessages(roomId);
+        setMessages(msgs);
+      } catch (e) {
+        console.error('Failed to load messages', e);
+      } finally {
+        setLoading(false);
+      }
+    })();
   }, [roomId]);
 
   // Supabase Realtime — postgres_changes subscription (native WebSocket on mobile)
@@ -105,9 +110,54 @@ export default function ChatRoomScreen() {
     };
   }, [roomId]);
 
-  const handleSend = useCallback(async () => {
+  // Auto-scroll when new messages arrive
+  useEffect(() => {
+    if (messages.length > 0) {
+      setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: true });
+      }, 100);
+    }
+  }, [messages.length]);
+
+  // Upload media to Supabase Storage
+  const uploadMedia = useCallback(async (localUri: string, mediaType: 'voice' | 'video'): Promise<string> => {
+    const ext = mediaType === 'voice' ? 'm4a' : 'mp4';
+    const timestamp = Date.now();
+    const path = `rooms/${roomId}/${user?.id}/${timestamp}.${ext}`;
+    
+    // Read file as base64
+    const base64 = await FileSystem.readAsStringAsync(localUri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    
+    // Convert base64 to Uint8Array
+    const binaryString = atob(base64);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    
+    const contentType = mediaType === 'voice' ? 'audio/m4a' : 'video/mp4';
+    
+    const { data, error } = await supabase.storage
+      .from('chat-media')
+      .upload(path, bytes, { contentType, upsert: true });
+    
+    if (error) throw error;
+    
+    // Get public URL
+    const { data: urlData } = supabase.storage
+      .from('chat-media')
+      .getPublicUrl(path);
+    
+    return urlData.publicUrl;
+  }, [roomId, user?.id]);
+
+  // Send text message
+  const handleSendText = useCallback(async () => {
     const trimmed = input.trim();
     if (!trimmed || sending) return;
+    
     setSending(true);
     const optimistic: ChatMessage = {
       id: `local-${Date.now()}`,
@@ -118,9 +168,9 @@ export default function ChatRoomScreen() {
     };
     setMessages((curr) => [...curr, optimistic]);
     setInput('');
+    
     try {
       const saved = await api.sendChatMessage(roomId, trimmed);
-      // Replace optimistic with saved
       setMessages((curr) => curr.map((m) => (m.id === optimistic.id ? saved : m)));
     } catch (e) {
       console.error('Send failed', e);
@@ -131,156 +181,335 @@ export default function ChatRoomScreen() {
     }
   }, [input, sending, roomId, user?.id]);
 
-  const renderItem = useCallback(
-    ({ item }: { item: ChatMessage }) => (
-      <MessageBubble msg={item} isMe={item.sender_id === user?.id} />
-    ),
-    [user?.id]
-  );
-
-  useEffect(() => {
-    // auto-scroll to end on new messages (list isn't inverted so scrollToEnd)
-    if (messages.length > 0) {
-      setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 50);
+  // Handle voice recording complete
+  const handleVoiceComplete = useCallback(async (uri: string, duration: number) => {
+    setIsRecordingVoice(false);
+    setUploadingMedia(true);
+    
+    // Optimistic UI
+    const optimisticId = `local-voice-${Date.now()}`;
+    const optimistic: ChatMessage = {
+      id: optimisticId,
+      room_id: roomId,
+      sender_id: user?.id || '',
+      content: '🎤 Sending voice...',
+      created_at: new Date().toISOString(),
+      media_type: 'voice',
+      media_duration: duration,
+    };
+    setMessages((curr) => [...curr, optimistic]);
+    
+    try {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      const mediaUrl = await uploadMedia(uri, 'voice');
+      const saved = await api.sendChatMessage(roomId, '', mediaUrl, 'voice', duration);
+      setMessages((curr) => curr.map((m) => (m.id === optimisticId ? saved : m)));
+    } catch (e) {
+      console.error('Voice send failed', e);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      setMessages((curr) => curr.filter((m) => m.id !== optimisticId));
+    } finally {
+      setUploadingMedia(false);
     }
-  }, [messages.length]);
+  }, [roomId, user?.id, uploadMedia]);
+
+  // Handle video recording complete
+  const handleVideoComplete = useCallback(async (uri: string, duration: number) => {
+    setShowVideoRecorder(false);
+    setUploadingMedia(true);
+    
+    const optimisticId = `local-video-${Date.now()}`;
+    const optimistic: ChatMessage = {
+      id: optimisticId,
+      room_id: roomId,
+      sender_id: user?.id || '',
+      content: '🎬 Sending video...',
+      created_at: new Date().toISOString(),
+      media_type: 'video',
+      media_duration: duration,
+    };
+    setMessages((curr) => [...curr, optimistic]);
+    
+    try {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      const mediaUrl = await uploadMedia(uri, 'video');
+      const saved = await api.sendChatMessage(roomId, '', mediaUrl, 'video', duration);
+      setMessages((curr) => curr.map((m) => (m.id === optimisticId ? saved : m)));
+    } catch (e) {
+      console.error('Video send failed', e);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      setMessages((curr) => curr.filter((m) => m.id !== optimisticId));
+    } finally {
+      setUploadingMedia(false);
+    }
+  }, [roomId, user?.id, uploadMedia]);
+
+  const formatTime = (iso: string) => {
+    const date = new Date(iso);
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  };
+
+  const renderMessage = ({ item }: { item: ChatMessage }) => {
+    const isMe = item.sender_id === user?.id;
+    const timestamp = formatTime(item.created_at);
+    
+    // Voice message
+    if (item.media_type === 'voice' && item.media_url) {
+      return (
+        <View style={[styles.msgRow, isMe && styles.msgRowMe]}>
+          <ChatVoiceMessage
+            mediaUrl={item.media_url}
+            duration={item.media_duration || 0}
+            isMe={isMe}
+            timestamp={timestamp}
+          />
+        </View>
+      );
+    }
+    
+    // Video message
+    if (item.media_type === 'video' && item.media_url) {
+      return (
+        <View style={[styles.msgRow, isMe && styles.msgRowMe]}>
+          <ChatVideoMessage
+            mediaUrl={item.media_url}
+            duration={item.media_duration || 0}
+            isMe={isMe}
+            timestamp={timestamp}
+          />
+        </View>
+      );
+    }
+    
+    // Text message
+    return (
+      <View style={[styles.msgRow, isMe && styles.msgRowMe]}>
+        <View style={[styles.bubble, isMe ? styles.bubbleMe : styles.bubbleThem]}>
+          <Text style={styles.msgText}>{item.content}</Text>
+          <Text style={styles.msgTime}>{timestamp}</Text>
+        </View>
+      </View>
+    );
+  };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      {/* Header */}
-      <BlurView intensity={40} tint="dark" style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} hitSlop={8}>
-          <Ionicons name="chevron-back" size={26} color={COLORS.textPrimary} />
-        </TouchableOpacity>
-        <View style={styles.headerCenter}>
-          <Text style={styles.headerTitle} numberOfLines={1}>
-            {room?.display_name || 'Chat'}
-          </Text>
-          <View style={styles.headerSub}>
-            <Ionicons name="lock-closed" size={11} color={COLORS.neon} />
-            <Text style={styles.headerSubText}>End-to-end protected</Text>
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
+    >
+      <Stack.Screen
+        options={{
+          headerStyle: { backgroundColor: COLORS.bg },
+          headerTintColor: COLORS.textPrimary,
+          headerTitle: room?.display_name || 'Chat',
+          headerBackTitle: 'Back',
+        }}
+      />
+
+      {loading ? (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={COLORS.neon} />
+        </View>
+      ) : (
+        <FlatList
+          ref={flatListRef}
+          data={messages}
+          keyExtractor={(item) => item.id}
+          renderItem={renderMessage}
+          contentContainerStyle={styles.msgList}
+          showsVerticalScrollIndicator={false}
+          onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
+        />
+      )}
+
+      {/* Input toolbar */}
+      <BlurView intensity={60} tint="dark" style={styles.inputBar}>
+        {isRecordingVoice ? (
+          <VoiceRecorder
+            isRecording={isRecordingVoice}
+            setIsRecording={setIsRecordingVoice}
+            onRecordingComplete={handleVoiceComplete}
+            onCancel={() => setIsRecordingVoice(false)}
+          />
+        ) : (
+          <View style={styles.inputRow}>
+            {/* Camera button */}
+            <TouchableOpacity
+              style={styles.iconBtn}
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                setShowVideoRecorder(true);
+              }}
+              disabled={uploadingMedia}
+            >
+              <Ionicons name="videocam" size={24} color={COLORS.neon} />
+            </TouchableOpacity>
+
+            {/* Text input */}
+            <View style={styles.inputWrapper}>
+              <TextInput
+                style={styles.input}
+                placeholder="Message..."
+                placeholderTextColor={COLORS.textSecondary}
+                value={input}
+                onChangeText={setInput}
+                multiline
+                maxLength={4000}
+                editable={!uploadingMedia}
+              />
+            </View>
+
+            {/* Mic / Send button */}
+            {input.trim() ? (
+              <TouchableOpacity
+                style={[styles.sendBtn, sending && styles.sendBtnDisabled]}
+                onPress={handleSendText}
+                disabled={sending || uploadingMedia}
+              >
+                {sending ? (
+                  <ActivityIndicator size="small" color={COLORS.bg} />
+                ) : (
+                  <Ionicons name="send" size={20} color={COLORS.bg} />
+                )}
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                style={styles.micBtn}
+                onLongPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                  setIsRecordingVoice(true);
+                }}
+                delayLongPress={200}
+                disabled={uploadingMedia}
+              >
+                {uploadingMedia ? (
+                  <ActivityIndicator size="small" color={COLORS.neon} />
+                ) : (
+                  <Ionicons name="mic" size={24} color={COLORS.neon} />
+                )}
+              </TouchableOpacity>
+            )}
           </View>
-        </View>
-        <View style={styles.avatarSm}>
-          <Text style={styles.avatarSmText}>
-            {(room?.display_name || 'C').split(' ').map((p) => p[0]).join('').toUpperCase().slice(0, 2)}
-          </Text>
-        </View>
+        )}
       </BlurView>
 
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={10}
-      >
-        {loading ? (
-          <View style={styles.loader}>
-            <ActivityIndicator color={COLORS.neon} />
-          </View>
-        ) : (
-          <FlatList
-            ref={listRef}
-            data={messages}
-            keyExtractor={(m) => m.id}
-            renderItem={renderItem}
-            contentContainerStyle={{ paddingHorizontal: 12, paddingTop: 12, paddingBottom: 12 }}
-            onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
-            removeClippedSubviews
-            initialNumToRender={20}
-            maxToRenderPerBatch={15}
-            windowSize={10}
-            ListEmptyComponent={
-              <View style={styles.empty}>
-                <Ionicons name="chatbubble-ellipses-outline" size={52} color={COLORS.textSecondary} />
-                <Text style={styles.emptyText}>Say hi 👋</Text>
-              </View>
-            }
-          />
-        )}
-
-        {/* Input bar */}
-        <BlurView intensity={40} tint="dark" style={styles.inputBar}>
-          <View style={styles.inputField}>
-            <TextInput
-              value={input}
-              onChangeText={setInput}
-              placeholder="Type a message"
-              placeholderTextColor={COLORS.textSecondary}
-              style={styles.input}
-              multiline
-              maxLength={4000}
-              onSubmitEditing={handleSend}
-            />
-          </View>
-          <TouchableOpacity
-            onPress={handleSend}
-            disabled={!input.trim() || sending}
-            style={[styles.sendBtn, (!input.trim() || sending) && { opacity: 0.5 }]}
-            activeOpacity={0.8}
-          >
-            <Ionicons name={sending ? 'hourglass' : 'send'} size={20} color={COLORS.bg} />
-          </TouchableOpacity>
-        </BlurView>
-      </KeyboardAvoidingView>
-    </SafeAreaView>
+      {/* Video recorder modal */}
+      <VideoRecorder
+        visible={showVideoRecorder}
+        onClose={() => setShowVideoRecorder(false)}
+        onVideoRecorded={handleVideoComplete}
+      />
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: COLORS.bg },
-  header: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    paddingHorizontal: 12, paddingVertical: 12,
-    borderBottomWidth: 1, borderBottomColor: COLORS.glassBorder,
-    overflow: 'hidden',
+  container: {
+    flex: 1,
+    backgroundColor: COLORS.bg,
   },
-  backBtn: { padding: 4 },
-  headerCenter: { flex: 1 },
-  headerTitle: { color: COLORS.textPrimary, fontSize: 17, fontWeight: '600' },
-  headerSub: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 2 },
-  headerSubText: { color: COLORS.neon, fontSize: 11, fontWeight: '500' },
-  avatarSm: {
-    width: 38, height: 38, borderRadius: 19, backgroundColor: COLORS.neonSoft,
-    justifyContent: 'center', alignItems: 'center',
-    borderWidth: 1, borderColor: 'rgba(0,200,83,0.35)',
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  avatarSmText: { color: COLORS.neon, fontSize: 14, fontWeight: '700' },
-  bubbleRow: { flexDirection: 'row', marginVertical: 4 },
+  msgList: {
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+    paddingTop: 12,
+  },
+  msgRow: {
+    flexDirection: 'row',
+    marginBottom: 10,
+  },
+  msgRowMe: {
+    justifyContent: 'flex-end',
+  },
   bubble: {
-    maxWidth: '78%',
-    paddingHorizontal: 14, paddingVertical: 10,
-    borderRadius: 18, borderWidth: 1,
+    maxWidth: '80%',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 18,
+    borderWidth: 1,
   },
-  bubbleMine: {
-    backgroundColor: COLORS.neonSoft,
+  bubbleMe: {
+    backgroundColor: COLORS.bubbleMe,
     borderColor: COLORS.neon,
     borderBottomRightRadius: 4,
   },
-  bubbleTheirs: {
+  bubbleThem: {
     backgroundColor: COLORS.bubbleOther,
     borderColor: COLORS.glassBorder,
     borderBottomLeftRadius: 4,
   },
-  bubbleText: { color: COLORS.textPrimary, fontSize: 15, lineHeight: 20 },
-  bubbleTime: { color: COLORS.textSecondary, fontSize: 10, marginTop: 4, alignSelf: 'flex-end' },
-  loader: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  empty: { alignItems: 'center', paddingTop: 80, gap: 10 },
-  emptyText: { color: COLORS.textSecondary, fontSize: 15 },
-  inputBar: {
-    flexDirection: 'row', alignItems: 'flex-end', gap: 10,
-    paddingHorizontal: 12, paddingTop: 10, paddingBottom: Platform.OS === 'ios' ? 24 : 12,
-    borderTopWidth: 1, borderTopColor: COLORS.glassBorder,
-    overflow: 'hidden',
+  msgText: {
+    color: COLORS.textPrimary,
+    fontSize: 15,
+    lineHeight: 21,
   },
-  inputField: {
-    flex: 1, backgroundColor: COLORS.glass,
-    borderWidth: 1, borderColor: COLORS.glassBorder, borderRadius: 22,
-    paddingHorizontal: 16, paddingVertical: Platform.OS === 'ios' ? 10 : 4,
+  msgTime: {
+    color: COLORS.textSecondary,
+    fontSize: 10,
+    marginTop: 4,
+    alignSelf: 'flex-end',
+  },
+  inputBar: {
+    borderTopWidth: 1,
+    borderTopColor: COLORS.glassBorder,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    paddingBottom: Platform.OS === 'ios' ? 30 : 10,
+  },
+  inputRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 8,
+  },
+  iconBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: COLORS.glass,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: COLORS.glassBorder,
+  },
+  inputWrapper: {
+    flex: 1,
+    backgroundColor: COLORS.glass,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: COLORS.glassBorder,
+    paddingHorizontal: 16,
+    paddingVertical: Platform.OS === 'ios' ? 10 : 6,
     maxHeight: 120,
   },
-  input: { color: COLORS.textPrimary, fontSize: 15, minHeight: 30 },
+  input: {
+    color: COLORS.textPrimary,
+    fontSize: 16,
+    maxHeight: 100,
+  },
   sendBtn: {
-    width: 44, height: 44, borderRadius: 22, backgroundColor: COLORS.neon,
-    justifyContent: 'center', alignItems: 'center',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: COLORS.neon,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  sendBtnDisabled: {
+    opacity: 0.6,
+  },
+  micBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: COLORS.neonSoft,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: COLORS.neon,
   },
 });
