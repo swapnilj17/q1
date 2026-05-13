@@ -46,7 +46,9 @@
         }
       ],
       "expo-web-browser",
-      "expo-sqlite"
+      "expo-sqlite",
+      "expo-audio",
+      "expo-video"
     ],
     "experiments": {
       "typedRoutes": true
