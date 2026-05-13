@@ -4,7 +4,7 @@ import { User, Note, Event, Reminder, DailyBriefing } from '../types';
 
 const API_URL = Constants.expoConfig?.extra?.EXPO_PUBLIC_BACKEND_URL || 
                 process.env.EXPO_PUBLIC_BACKEND_URL || 
-                'https://expo-organizer.preview.emergentagent.com';
+                'https://showapp-2.preview.emergentagent.com';
 
 class ApiService {
   private async getToken(): Promise<string | null> {

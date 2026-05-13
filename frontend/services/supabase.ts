@@ -9,6 +9,22 @@ if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
   console.warn('Supabase env vars missing — realtime chat will not connect');
 }
 
+// Resolve WebSocket transport - provide a fallback for Node.js < 22 environments
+// (Metro SSG/SSR runs in Node.js 20 which lacks native WebSocket)
+const resolveTransport = (): any => {
+  if (typeof WebSocket !== 'undefined') return WebSocket;
+  if (typeof globalThis !== 'undefined' && (globalThis as any).WebSocket) return (globalThis as any).WebSocket;
+  // Graceful fallback - realtime will not work but app won't crash
+  return class NoopWS {
+    static CONNECTING = 0; static OPEN = 1; static CLOSING = 2; static CLOSED = 3;
+    readyState = 3; url = ''; protocol = '';
+    constructor(_url: string) {}
+    close() {} send() {}
+    onopen = null; onmessage = null; onclose = null; onerror = null;
+    addEventListener() {} removeEventListener() {}
+  };
+};
+
 // Use safe fallback so createClient never throws at bundle/runtime when env is missing.
 export const supabase = createClient(
   SUPABASE_URL || 'https://placeholder.supabase.co',
@@ -20,6 +36,7 @@ export const supabase = createClient(
       detectSessionInUrl: false,
     },
     realtime: {
+      transport: resolveTransport(),
       params: { eventsPerSecond: 10 },
     },
   }
