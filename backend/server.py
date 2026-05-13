@@ -1,7 +1,7 @@
 """
 LifeFlow Backend - Supabase Edition
 """
-from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi import FastAPI, HTTPException, Depends, status, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr, Field
@@ -90,6 +90,10 @@ class NoteUpdate(BaseModel):
     content: Optional[str] = None
     tags: Optional[List[str]] = None
     pinned: Optional[bool] = None
+    media_url: Optional[str] = None
+    media_type: Optional[str] = None
+    transcript: Optional[str] = None
+    ai_summary: Optional[str] = None
 
 class EventCreate(BaseModel):
     title: str
@@ -677,6 +681,60 @@ async def send_chat_message(
 @app.get("/api/health")
 async def health_check():
     return {"status": "healthy", "service": "LifeFlow API", "backend": "Supabase"}
+
+# ─────────────────────── MEDIA ───────────────────────
+
+@app.post("/api/media/upload")
+async def upload_media(
+    file: UploadFile = File(...),
+    user_id: str = Form(...),
+    note_id: str = Form(...),
+    media_type: str = Form(...),
+    current_user: dict = Depends(get_current_user),
+):
+    """Upload an audio/video file to Supabase Storage media-vault bucket."""
+    if user_id != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    ext = "m4a" if media_type == "audio" else "mp4"
+    content_type = "audio/m4a" if media_type == "audio" else "video/mp4"
+    timestamp = int(datetime.now().timestamp() * 1000)
+    path = f"notes/{user_id}/{note_id}/{timestamp}.{ext}"
+
+    file_bytes = await file.read()
+
+    try:
+        supabase.storage.from_("media-vault").upload(
+            path=path,
+            file=file_bytes,
+            file_options={"content-type": content_type, "upsert": True},
+        )
+    except Exception as e:
+        # If already exists with same path, that's fine
+        if "already exists" not in str(e).lower():
+            raise HTTPException(status_code=500, detail=f"Storage upload failed: {str(e)}")
+
+    public_url = supabase.storage.from_("media-vault").get_public_url(path)
+
+    return {"url": public_url, "path": path, "media_type": media_type}
+
+
+@app.post("/api/media/process")
+async def process_media(
+    note_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Placeholder for AI processing (Groq Whisper + Llama) — activate by adding GROQ_API_KEY."""
+    groq_key = os.getenv("GROQ_API_KEY")
+    if not groq_key:
+        return {
+            "note_id": note_id,
+            "status": "pending",
+            "message": "Add GROQ_API_KEY to backend/.env to enable AI transcription & summarisation.",
+        }
+    # TODO: implement Groq Whisper + Llama 3.3 when key is provided
+    return {"note_id": note_id, "status": "not_implemented"}
+
 
 if __name__ == "__main__":
     import uvicorn

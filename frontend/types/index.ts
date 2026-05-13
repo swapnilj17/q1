@@ -17,6 +17,10 @@ export interface Note {
   journal_date?: string;
   created_at: string;
   updated_at: string;
+  // Media fields for Voice/Video Notes
+  media_url?: string | null;
+  media_type?: 'audio' | 'video' | null;
+  transcript?: string | null;
 }
 
 export interface Event {

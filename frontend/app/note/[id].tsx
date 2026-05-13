@@ -10,6 +10,9 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/contexts/ThemeContext';
 import * as db from '@/services/database';
 import { Note } from '@/types';
+import VoiceRecorder from '@/components/VoiceRecorder';
+import VideoRecorder from '@/components/VideoRecorder';
+import MediaPlayer from '@/components/MediaPlayer';
 
 export default function NoteEditorScreen() {
   const { colors } = useTheme();
@@ -27,6 +30,13 @@ export default function NoteEditorScreen() {
   const [isLoading, setIsLoading] = useState(!isNewNote);
   const [isSaving, setIsSaving] = useState(false);
 
+  // Media state
+  const [showVoiceRecorder, setShowVoiceRecorder] = useState(false);
+  const [showVideoRecorder, setShowVideoRecorder] = useState(false);
+  const [mediaUrl, setMediaUrl] = useState<string | null>(null);
+  const [mediaType, setMediaType] = useState<'audio' | 'video' | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+
   useEffect(() => {
     if (!isNewNote && id && isDbReady) loadNote();
   }, [id, isDbReady]);
@@ -40,6 +50,11 @@ export default function NoteEditorScreen() {
         setContent(noteData.content);
         setTags(noteData.tags || []);
         setPinned(noteData.pinned);
+        // Load existing media
+        if (noteData.media_url) {
+          setMediaUrl(noteData.media_url);
+          setMediaType(noteData.media_type || null);
+        }
       } else {
         Alert.alert('Error', 'Note not found');
         router.back();
@@ -56,10 +71,19 @@ export default function NoteEditorScreen() {
     if (!title.trim() || !user) { Alert.alert('Error', 'Please enter a title'); return; }
     setIsSaving(true);
     try {
+      const noteData = {
+        title: title.trim(),
+        content,
+        tags,
+        pinned,
+        media_url: mediaUrl,
+        media_type: mediaType,
+      };
+
       if (isNewNote) {
-        await db.createLocalNote(user.id, { title: title.trim(), content, tags, pinned });
+        await db.createLocalNote(user.id, noteData);
       } else {
-        await db.updateLocalNote(id!, { title: title.trim(), content, tags, pinned });
+        await db.updateLocalNote(id!, noteData);
       }
       router.back();
     } catch (error) {
@@ -88,6 +112,51 @@ export default function NoteEditorScreen() {
 
   const handleRemoveTag = (tagToRemove: string) => setTags(tags.filter(t => t !== tagToRemove));
 
+  // Voice recording complete handler
+  const handleVoiceRecordingComplete = async (uri: string, durationMs: number) => {
+    setShowVoiceRecorder(false);
+    setIsUploading(true);
+    try {
+      // For now, store the local URI directly
+      // In production, this would upload to Supabase Storage
+      setMediaUrl(uri);
+      setMediaType('audio');
+      Alert.alert('Voice Note Added', `Duration: ${Math.round(durationMs / 1000)}s`);
+    } catch (error) {
+      Alert.alert('Error', 'Failed to save voice note');
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  // Video recording complete handler
+  const handleVideoRecordingComplete = async (uri: string) => {
+    setShowVideoRecorder(false);
+    setIsUploading(true);
+    try {
+      // For now, store the local URI directly
+      // In production, this would upload to Supabase Storage
+      setMediaUrl(uri);
+      setMediaType('video');
+      Alert.alert('Video Note Added', 'Your video has been attached.');
+    } catch (error) {
+      Alert.alert('Error', 'Failed to save video note');
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  // Remove attached media
+  const handleRemoveMedia = () => {
+    Alert.alert('Remove Media', 'Remove attached recording?', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Remove', style: 'destructive', onPress: () => {
+        setMediaUrl(null);
+        setMediaType(null);
+      }},
+    ]);
+  };
+
   const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
     header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.border, backgroundColor: colors.surface },
@@ -97,7 +166,116 @@ export default function NoteEditorScreen() {
     saveButtonText: { color: '#FFFFFF', fontWeight: '600' },
     content: { flex: 1 },
     titleInput: { fontSize: 22, fontWeight: '600', color: colors.text, paddingHorizontal: 20, paddingTop: 20, paddingBottom: 12 },
-    contentInput: { flex: 1, fontSize: 16, color: colors.text, paddingHorizontal: 20, textAlignVertical: 'top', lineHeight: 24 },
+    contentInput: { flex: 1, fontSize: 16, color: colors.text, paddingHorizontal: 20, textAlignVertical: 'top', lineHeight: 24, minHeight: 120 },
+    // Media Toolbar
+    mediaToolbar: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 20,
+      paddingVertical: 14,
+      gap: 12,
+      borderTopWidth: 1,
+      borderTopColor: colors.border,
+      backgroundColor: colors.surface,
+    },
+    mediaToolbarTitle: {
+      fontSize: 13,
+      fontWeight: '600',
+      color: colors.textSecondary,
+      marginRight: 8,
+    },
+    mediaBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      paddingHorizontal: 14,
+      paddingVertical: 10,
+      borderRadius: 12,
+      backgroundColor: 'rgba(0,200,83,0.12)',
+      borderWidth: 1,
+      borderColor: 'rgba(0,200,83,0.25)',
+    },
+    mediaBtnText: {
+      fontSize: 13,
+      fontWeight: '600',
+      color: '#00C853',
+    },
+    mediaBtnDisabled: {
+      opacity: 0.5,
+    },
+    // Media Player Section
+    mediaSection: {
+      paddingHorizontal: 20,
+      paddingTop: 16,
+      paddingBottom: 8,
+    },
+    mediaSectionHeader: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: 12,
+    },
+    mediaSectionTitle: {
+      fontSize: 13,
+      fontWeight: '600',
+      color: colors.textSecondary,
+      textTransform: 'uppercase',
+      letterSpacing: 0.5,
+    },
+    removeMediaBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+    },
+    removeMediaText: {
+      fontSize: 12,
+      color: colors.error,
+      fontWeight: '500',
+    },
+    // Smart Insights placeholder
+    insightsCard: {
+      marginHorizontal: 20,
+      marginTop: 16,
+      marginBottom: 8,
+      padding: 16,
+      borderRadius: 16,
+      backgroundColor: 'rgba(255,255,255,0.04)',
+      borderWidth: 1,
+      borderColor: 'rgba(255,255,255,0.08)',
+    },
+    insightsHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      marginBottom: 8,
+    },
+    insightsTitle: {
+      fontSize: 14,
+      fontWeight: '600',
+      color: '#00C853',
+    },
+    insightsPlaceholder: {
+      fontSize: 13,
+      color: colors.textSecondary,
+      lineHeight: 20,
+    },
+    // Upload indicator
+    uploadingOverlay: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 10,
+      paddingVertical: 10,
+      backgroundColor: 'rgba(0,200,83,0.1)',
+      marginHorizontal: 20,
+      marginTop: 12,
+      borderRadius: 10,
+    },
+    uploadingText: {
+      color: '#00C853',
+      fontSize: 13,
+      fontWeight: '500',
+    },
     toolbar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderTopWidth: 1, borderTopColor: colors.border, backgroundColor: colors.surface, gap: 8 },
     toolbarButton: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, backgroundColor: colors.background },
     toolbarButtonActive: { backgroundColor: colors.primaryLight },
@@ -132,9 +310,70 @@ export default function NoteEditorScreen() {
             {isSaving ? <ActivityIndicator color="#FFFFFF" size="small" /> : <Text style={styles.saveButtonText}>Save</Text>}
           </TouchableOpacity>
         </View>
+
         <ScrollView style={styles.content} keyboardShouldPersistTaps="handled">
           <TextInput style={styles.titleInput} placeholder="Note Title" placeholderTextColor={colors.textSecondary} value={title} onChangeText={setTitle} />
           <TextInput style={styles.contentInput} placeholder="Start writing..." placeholderTextColor={colors.textSecondary} value={content} onChangeText={setContent} multiline scrollEnabled={false} />
+
+          {/* Media Toolbar */}
+          <View style={styles.mediaToolbar}>
+            <Text style={styles.mediaToolbarTitle}>ATTACH</Text>
+            <TouchableOpacity
+              style={[styles.mediaBtn, (mediaUrl || isUploading) && styles.mediaBtnDisabled]}
+              onPress={() => setShowVoiceRecorder(true)}
+              disabled={!!mediaUrl || isUploading}
+            >
+              <Ionicons name="mic" size={18} color="#00C853" />
+              <Text style={styles.mediaBtnText}>Voice</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.mediaBtn, (mediaUrl || isUploading) && styles.mediaBtnDisabled]}
+              onPress={() => setShowVideoRecorder(true)}
+              disabled={!!mediaUrl || isUploading}
+            >
+              <Ionicons name="videocam" size={18} color="#00C853" />
+              <Text style={styles.mediaBtnText}>Video</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Upload Progress */}
+          {isUploading && (
+            <View style={styles.uploadingOverlay}>
+              <ActivityIndicator size="small" color="#00C853" />
+              <Text style={styles.uploadingText}>Processing media...</Text>
+            </View>
+          )}
+
+          {/* Media Player */}
+          {mediaUrl && mediaType && !isUploading && (
+            <View style={styles.mediaSection}>
+              <View style={styles.mediaSectionHeader}>
+                <Text style={styles.mediaSectionTitle}>
+                  {mediaType === 'audio' ? 'Voice Note' : 'Video Note'}
+                </Text>
+                <TouchableOpacity style={styles.removeMediaBtn} onPress={handleRemoveMedia}>
+                  <Ionicons name="trash-outline" size={14} color={colors.error} />
+                  <Text style={styles.removeMediaText}>Remove</Text>
+                </TouchableOpacity>
+              </View>
+              <MediaPlayer uri={mediaUrl} mediaType={mediaType} />
+            </View>
+          )}
+
+          {/* Smart Insights Placeholder (AI disabled per user request) */}
+          {mediaUrl && mediaType && (
+            <View style={styles.insightsCard}>
+              <View style={styles.insightsHeader}>
+                <Ionicons name="sparkles" size={16} color="#00C853" />
+                <Text style={styles.insightsTitle}>Smart Insights</Text>
+              </View>
+              <Text style={styles.insightsPlaceholder}>
+                AI transcription and summary will appear here once enabled. Your {mediaType === 'audio' ? 'voice' : 'video'} note is saved locally.
+              </Text>
+            </View>
+          )}
+
+          {/* Tags Section */}
           <View style={styles.tagsSection}>
             <Text style={styles.tagsSectionTitle}>TAGS</Text>
             <View style={styles.tagsContainer}>
@@ -153,6 +392,7 @@ export default function NoteEditorScreen() {
             </View>
           </View>
         </ScrollView>
+
         <View style={styles.toolbar}>
           <TouchableOpacity style={[styles.toolbarButton, pinned && styles.toolbarButtonActive]} onPress={() => setPinned(!pinned)}>
             <Ionicons name={pinned ? 'pin' : 'pin-outline'} size={18} color={pinned ? colors.primary : colors.text} />
@@ -165,6 +405,20 @@ export default function NoteEditorScreen() {
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
+
+      {/* Voice Recorder Modal */}
+      <VoiceRecorder
+        visible={showVoiceRecorder}
+        onRecordingComplete={handleVoiceRecordingComplete}
+        onCancel={() => setShowVoiceRecorder(false)}
+      />
+
+      {/* Video Recorder Modal */}
+      <VideoRecorder
+        visible={showVideoRecorder}
+        onRecordingComplete={handleVideoRecordingComplete}
+        onCancel={() => setShowVideoRecorder(false)}
+      />
     </SafeAreaView>
   );
 }

@@ -34,7 +34,10 @@ export const initDatabase = async (): Promise<void> => {
       created_at TEXT,
       updated_at TEXT,
       synced INTEGER DEFAULT 0,
-      deleted INTEGER DEFAULT 0
+      deleted INTEGER DEFAULT 0,
+      media_url TEXT,
+      media_type TEXT,
+      transcript TEXT
     );
     
     CREATE TABLE IF NOT EXISTS events (
@@ -70,6 +73,17 @@ export const initDatabase = async (): Promise<void> => {
       created_at TEXT
     );
   `);
+
+  // Migration: Add media columns if they don't exist (for existing databases)
+  try {
+    await db.execAsync(`ALTER TABLE notes ADD COLUMN media_url TEXT;`);
+  } catch (e) { /* column already exists */ }
+  try {
+    await db.execAsync(`ALTER TABLE notes ADD COLUMN media_type TEXT;`);
+  } catch (e) { /* column already exists */ }
+  try {
+    await db.execAsync(`ALTER TABLE notes ADD COLUMN transcript TEXT;`);
+  } catch (e) { /* column already exists */ }
 };
 
 const getDb = (): SQLite.SQLiteDatabase => {
@@ -138,6 +152,9 @@ export const getLocalNotes = async (userId: string, options?: { pinned?: boolean
     ...row,
     tags: JSON.parse(row.tags || '[]'),
     pinned: !!row.pinned,
+    media_url: row.media_url || null,
+    media_type: row.media_type || null,
+    transcript: row.transcript || null,
   }));
 };
 
@@ -145,7 +162,14 @@ export const getLocalNote = async (noteId: string): Promise<Note | null> => {
   const database = getDb();
   const result = await database.getFirstAsync<any>('SELECT * FROM notes WHERE id = ?', [noteId]);
   if (!result) return null;
-  return { ...result, tags: JSON.parse(result.tags || '[]'), pinned: !!result.pinned };
+  return {
+    ...result,
+    tags: JSON.parse(result.tags || '[]'),
+    pinned: !!result.pinned,
+    media_url: result.media_url || null,
+    media_type: result.media_type || null,
+    transcript: result.transcript || null,
+  };
 };
 
 export const createLocalNote = async (userId: string, note: Partial<Note>): Promise<Note> => {
@@ -154,14 +178,23 @@ export const createLocalNote = async (userId: string, note: Partial<Note>): Prom
   const now = new Date().toISOString();
   
   await database.runAsync(
-    `INSERT INTO notes (id, user_id, title, content, tags, pinned, journal_date, created_at, updated_at, synced)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
-    [id, userId, note.title || 'Untitled', note.content || '', JSON.stringify(note.tags || []), note.pinned ? 1 : 0, note.journal_date || null, now, now]
+    `INSERT INTO notes (id, user_id, title, content, tags, pinned, journal_date, created_at, updated_at, synced, media_url, media_type, transcript)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
+    [
+      id, userId, note.title || 'Untitled', note.content || '', JSON.stringify(note.tags || []),
+      note.pinned ? 1 : 0, note.journal_date || null, now, now,
+      note.media_url || null, note.media_type || null, note.transcript || null
+    ]
   );
   
   await addToSyncQueue('notes', id, 'create', { ...note, id, user_id: userId, created_at: now, updated_at: now });
   
-  return { id, user_id: userId, title: note.title || 'Untitled', content: note.content || '', tags: note.tags || [], pinned: note.pinned || false, journal_date: note.journal_date, created_at: now, updated_at: now };
+  return {
+    id, user_id: userId, title: note.title || 'Untitled', content: note.content || '',
+    tags: note.tags || [], pinned: note.pinned || false, journal_date: note.journal_date,
+    created_at: now, updated_at: now,
+    media_url: note.media_url || null, media_type: note.media_type || null, transcript: note.transcript || null,
+  };
 };
 
 export const updateLocalNote = async (noteId: string, note: Partial<Note>): Promise<Note | null> => {
@@ -175,6 +208,9 @@ export const updateLocalNote = async (noteId: string, note: Partial<Note>): Prom
   if (note.content !== undefined) { updates.push('content = ?'); params.push(note.content); }
   if (note.tags !== undefined) { updates.push('tags = ?'); params.push(JSON.stringify(note.tags)); }
   if (note.pinned !== undefined) { updates.push('pinned = ?'); params.push(note.pinned ? 1 : 0); }
+  if (note.media_url !== undefined) { updates.push('media_url = ?'); params.push(note.media_url); }
+  if (note.media_type !== undefined) { updates.push('media_type = ?'); params.push(note.media_type); }
+  if (note.transcript !== undefined) { updates.push('transcript = ?'); params.push(note.transcript); }
   
   params.push(noteId);
   await database.runAsync(`UPDATE notes SET ${updates.join(', ')} WHERE id = ?`, params);
